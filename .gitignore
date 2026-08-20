@@ -1,5 +1,0 @@
-# ndk-build outputs
-libs/
-obj/
-*.o
-*.d
