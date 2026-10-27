@@ -35,6 +35,20 @@ esac
 
 mkdir -p "$OUT"
 
+verify_artifacts() {
+  echo "== verify"
+  local so="$OUT/liboxhk.so" dex="$OUT/dex/classes.dex"
+  readelf -h "$so" | grep -q 'AArch64' || { echo "liboxhk.so is not AArch64"; exit 1; }
+  readelf --dyn-syms -W "$so" | grep -q 'Java_oxhk_Oxhk_nativeTick' \
+      || { echo "JNI entry points missing from liboxhk.so"; exit 1; }
+  readelf --dyn-syms -W "$so" | grep -q 'Java_oxhk_Oxhk_nativeInit' \
+      || { echo "nativeInit missing"; exit 1; }
+  [ "$(head -c 3 "$dex")" = "dex" ] || { echo "classes.dex has no dex magic"; exit 1; }
+  grep -qa 'oxhk/Oxhk' "$dex" || { echo "classes.dex does not contain oxhk/Oxhk"; exit 1; }
+  echo "   liboxhk.so $(stat -c%s "$so") B, classes.dex $(stat -c%s "$dex") B"
+}
+
+
 if [ "$MODE" != probe ]; then
   CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$API-clang++"
   echo "== native"
@@ -48,6 +62,8 @@ if [ "$MODE" != probe ]; then
   "$BUILD_TOOLS/d8" --release --min-api "$MIN_API" --lib "$ANDROID_JAR" \
         --output "$OUT/dex" $(find "$OUT/javac" -name '*.class')
 fi
+
+verify_artifacts
 
 if [ "$MODE" = artifacts ]; then
   echo "artifacts: $OUT/liboxhk.so  $OUT/dex/classes.dex"
