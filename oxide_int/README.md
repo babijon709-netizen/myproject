@@ -324,6 +324,31 @@ the payload job). Two pitfalls already fixed there: `javac` against `android.jar
 `LambdaMetafactory` (no lambdas anywhere in this tree), and `apksig` must be dexed together with
 the injector classes.
 
+
+## container plan (route B): why a probe comes before code
+
+A dual-space container (VirtualApp style) would leave the game's apks bit-identical and store-signed,
+so every signature/repack check passes by construction: the game stays installed as it is, and the
+container just loads its dex and libs into our own process. The catch is native code. On Android 10+
+the loader refuses two things:
+
+* `dlopen` of a file in our own data dir — W^X, `untrusted_app` has no `execute` on `app_data_file`
+* `dlopen` of the game's libs out of `/data/app/.../lib/arm64` — SELinux gives us `read` on
+  `apk_data_file`, not `execute`
+
+If both fail, the libs have to live in the container's own `lib/arm64-v8a` (i.e. a ~300 MB apk built
+with the arm64 split available at CI time), or be mapped from a memfd. Which one is possible is a
+device question, not a design question — hence `container/` + `tools/build_container.sh`
+(artifact `oxhk-sandbox-apk`, ~16 KB): it tries every path and prints the errno.
+
+`container/jni/probe.c` — dlopen control / game dir / app copy / `android_dlopen_ext` over a memfd,
+plus what `/proc/self/maps` shows to the packer.
+`container/java/oxhk/sandbox/MainActivity.java` — game PackageInfo + real signer sha-256, lib dir
+listing and total size, free space, hidden-api reflection (`ActivityThread`, `VMRuntime`,
+Unsafe exemption), and loading the game's Application class out of its own `sourceDir` with
+`initialize=true` (the `<clinit>` line says whether the packer's `System.loadLibrary("loader")`
+resolves inside our process).
+
 ## known gaps / FILL
 
 * `vitals_health = 0xB8` (`Ksd`, float right after `m_DamageMultipliers`) — the property
