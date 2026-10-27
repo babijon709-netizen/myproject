@@ -96,8 +96,10 @@ public final class MainActivity extends Activity {
         logs.setAllCaps(false);
         logs.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                append("\n== logcat (this process)");
-                append(Logs.recent(4000));
+                append("\n== logcat (uid " + android.os.Process.myUid() + ")");
+                String lc = Logs.recent(6000);
+                append(lc);
+                append("saved: " + Logs.save(MainActivity.this, "logcat.txt", lc));
             }
         });
         root.addView(logs, lp());
@@ -144,6 +146,13 @@ public final class MainActivity extends Activity {
 
         setContentView(root);
         Logs.installCrashHandler(this);
+        append("all files access: " + android.os.Environment.isExternalStorageManager()
+                + "; logcat is uid-wide");
+        String run = Logs.lastRun(this);
+        if (run.length() > 0) {
+            append("\n== last container run (from disk)");
+            append(run);
+        }
         String crash = Logs.lastCrash(this);
         if (crash.length() > 0) {
             append("== last crash (previous run)");
@@ -208,20 +217,24 @@ public final class MainActivity extends Activity {
                 append("grant it in the settings screen that just opened, then come back");
                 return;
             }
-            File dir = new File("/storage/emulated/0/Android/data/" + Sandbox.GAME + "/files");
-            boolean made = dir.exists() || dir.mkdirs();
-            File probe = new File(dir, "oxhk-write-test");
-            boolean wrote = false;
-            try {
-                java.io.FileOutputStream fos = new java.io.FileOutputStream(probe);
-                fos.write(42);
-                fos.close();
-                wrote = true;
-                probe.delete();
-            } catch (Throwable t) {
-                append("write failed: " + t);
+            for (String sub : new String[]{"files", "cache", "files/unity"}) {
+                File dir = new File("/storage/emulated/0/Android/data/" + Sandbox.GAME + "/" + sub);
+                boolean made = dir.exists() || dir.mkdirs();
+                File probe = new File(dir, "oxhk-write-test");
+                boolean wrote = false;
+                try {
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(probe);
+                    fos.write(42);
+                    fos.close();
+                    wrote = true;
+                    probe.delete();
+                } catch (Throwable t) {
+                    append("write failed: " + t);
+                }
+                long free = dir.getUsableSpace();
+                append("game dir " + sub + ": exists=" + made + " writable=" + wrote
+                        + " free=" + (free / 1048576) + " MB");
             }
-            append("game data dir: " + dir + " exists=" + made + " writable=" + wrote);
         } catch (Throwable t) {
             append("allFiles failed: " + t);
         }

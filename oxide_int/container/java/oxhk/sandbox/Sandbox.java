@@ -26,6 +26,7 @@ import android.util.DisplayMetrics;
 import android.util.Log;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,14 +42,39 @@ public final class Sandbox {
 
     public static void setLog(Sink l) { log = l; }
 
+    private static File traceFile;
+
     static void say(String s) {
         Log.i(TAG, s);
         Sink l = log;
         if (l != null) l.line(s);
+        if (traceFile != null) {
+            try {
+                FileOutputStream fos = new FileOutputStream(traceFile, true);
+                fos.write((s + "\n").getBytes("UTF-8"));
+                fos.close();
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** the trace also goes to disk: a process that dies takes its UI with it. */
+    private static void openTrace(Context c) {
+        if (traceFile != null) return;
+        traceFile = new File(c.getFilesDir(), "last-run.txt");
+        try {
+            FileOutputStream fos = new FileOutputStream(traceFile, false);
+            fos.write(("run " + new java.util.Date() + "\n").getBytes("UTF-8"));
+            fos.close();
+        } catch (Throwable ignored) {
+        }
     }
 
     public static synchronized Sandbox get(Context host) {
-        if (instance == null) instance = new Sandbox(host.getApplicationContext());
+        if (instance == null) {
+            openTrace(host.getApplicationContext());
+            instance = new Sandbox(host.getApplicationContext());
+        }
         return instance;
     }
 
