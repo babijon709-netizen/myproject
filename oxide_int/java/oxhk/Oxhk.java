@@ -53,6 +53,10 @@ public final class Oxhk {
     static int headBone = 10;   // HumanBodyBones.Head
     static int cooldownMs = 30;
 
+    // libloader.so (the game's packer) walks modules and files at boot; stay out of the process
+    // until that's over. 0 = attach immediately, 2500-4000 = after the loader's startup scans.
+    static final int ATTACH_DELAY_MS = 0;
+
     private static boolean sInstalled;
     private static Activity sActivity;
     private static EspView sView;
@@ -97,15 +101,23 @@ public final class Oxhk {
                 sActivity = a;
                 loadConfig(a);
                 if (sView == null) sView = new EspView(a);
-                ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
-                if (sView.getParent() == null) {
-                    decor.addView(sView, new FrameLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-                }
-                sView.bringToFront();
-                pushConfig();
-                nativeInit(a.getFilesDir().getAbsolutePath(), decor.getWidth(), decor.getHeight());
-                Log.i(TAG, "overlay attached to " + a.getClass().getName());
+                final ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
+                Runnable add = () -> {
+                    try {
+                        if (sView.getParent() == null) {
+                            decor.addView(sView, new FrameLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                        }
+                        sView.bringToFront();
+                        pushConfig();
+                        nativeInit(a.getFilesDir().getAbsolutePath(), decor.getWidth(), decor.getHeight());
+                        Log.i(TAG, "overlay attached to " + a.getClass().getName());
+                    } catch (Throwable t) {
+                        Log.e(TAG, "attach(run) failed", t);
+                    }
+                };
+                if (ATTACH_DELAY_MS > 0) decor.postDelayed(add, ATTACH_DELAY_MS);
+                else add.run();
             } catch (Throwable t) {
                 Log.e(TAG, "attach failed", t);
             }

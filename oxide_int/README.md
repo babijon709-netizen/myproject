@@ -131,6 +131,83 @@ caller. Diff the two runs:
 * the store build asks, the repack throws / the call disappears → something native is parsing
   the apk itself, and the check sits in `libloader`
 
+
+## libloader.so, actually opened
+
+static pass over `split_config.arm64_v8a/lib/arm64-v8a/libloader.so` (15 396 440 B, no exec):
+
+**it is a packer, not "just a loader".** Everything prose-like is encrypted:
+
+| region | what | state |
+|---|---|---|
+| `.text` 0x8ce00 | 12 MB of code | mixed: partly plaintext (disassembles cleanly), partly not |
+| `.rodata` 0xc9c000 (0xa0056) | strings/consts | encrypted, no ASCII at all |
+| `.gcc_abi` 0xdf1de5 (0x15eb1) | ? | encrypted, 0.4 % zero bytes |
+| `.gnu.plt` 0xdced90 (0x23055) | — | **100 % zeros**, 143 KB of reserved space (decrypt landing area) |
+| `.dyncl` / `.ctx` / `.eh_trace` / `.adi` / `.gcc_r` | tables | binary, encrypted |
+
+Consequences: keyword search for `frida`/`xposed`/`maps`/`TracerPid` finds nothing — by design.
+`strings` on this lib is a dead end, and any "it contains X" claim from strings is false.
+
+Facts worth knowing:
+
+* `.hash` says 224 dynsyms. The section-based symbol table beyond that is garbage — that is why
+  `readelf` prints nonsense names (`nflateInit2_`, `teInit2_`). Read the dynamic segment
+  (`DT_SYMTAB`/`DT_HASH`), not the section table.
+* `.init_array` (5 slots, all `R_AARCH64_RELATIVE`) → constructors at `0x5bd248`, `0xc931fc`,
+  `0xc936cc`, `0x5bd270`, `0xb0c72c`. `0x5bd248` is `getpagesize()` + tail call;
+  `0x5bd270` tail-calls `sub_746554(.bss 0xf1941c, func 0x5bd4c8)` — a callback registration.
+* **pointer mangling**: `adrp x27, #0xccb000 ; eor x27, x27, x18 ; eor x27, x27, x18`
+  — `x18` is `TPIDR_EL0`, so every table pointer is XORed with the thread pointer. Static xrefs
+  into `.rodata` do not exist; they're computed at runtime.
+* JNI_OnLoad (`0x89b6f0`, 3680 B) is plaintext, 0x500-byte frame, calls `sub_197ea4` and the
+  thunk at `0x8cdd0` before anything else.
+* **anomaly**: `JNI_OnLoad` sits at `0x89b6f0`, i.e. inside `PT_LOAD #1`, which the program
+  headers mark `R` — not `R E`. Valid AArch64 code in a non-executable segment means the file
+  as shipped in the APK is not the image the process runs (something re-maps / rebuilds it at
+  load). Compare file vs memory at runtime if you want to know which.
+
+**its own syscall layer** — 60 hand-written `mov x8, #N ; svc #0 ; ret` thunks, verified:
+
+```
+0x6ae2d8..0x6ae834 (main table) + 0x64fab4, 0x667694, 0x6676a4
+ptrace 117 · kill 129 · tgkill 131 · process_vm_writev 270 · execve 221 · getppid 173
+wait4 260 · prctl 167 · socket/bind/listen/accept/sendmsg/recvmsg 198..212
+mmap/mprotect/mremap 222/226/216 · getrandom 278 · futex 98 · uname 160
+```
+
+That is the answer to "does it detect injects": yes, the toolkit is there — direct `svc` for
+`ptrace`/`kill`/`process_vm_writev`/`execve` (bypasses libc, so libc hooks see nothing), plus
+`dl_iterate_phdr` (13 call sites) to walk the module list, plus the xattr family
+(`getxattr`/`fgetxattr`/`listxattr`/`flistxattr`, 12 sites) and `stat`/`lstat`/`access`/`fopen`
+(25/4/6/14 sites) to look at files, plus `fork`/`getppid`/`prctl`.
+
+What it *flags* and when is still unknown, because every string it compares against is
+decrypted at runtime. Static analysis stops here.
+
+## watching it instead of guessing
+
+```bash
+frida -U -f com.catsbit.oxidesurvivalisland -l tools/probe_loader.js --no-pause
+```
+
+`tools/probe_loader.js` resolves `libloader.so`, attaches to all 60 syscall thunks by RVA and
+logs every direct syscall with args + caller (works even though the lib bypasses libc), and
+flags `PTRACE` / `KILL` / `TGKILL` / `VM_WRITEV` / `EXECVE` / `GETPPID` / `WAIT4` / `PRCTL`
+with a backtrace. Two runs: clean install, then the repack. If the repack produces `PTRACE`,
+`KILL` or module-list walks that don't exist on the clean build, that's the detector firing —
+and the backtrace points straight at the function to patch.
+
+Defensive knobs already in the code:
+
+* `Oxhk.ATTACH_DELAY_MS` — keep our lib out of the process until the loader's boot scans are
+  done (0 = immediate; 2500–4000 is the interesting range).
+* no ptrace, no inline hooks, no writes into game libs → the `ptrace`/`prctl`/`mprotect` checks
+  in that table have nothing to see. Our only exposure is the module list
+  (`dl_iterate_phdr`) and the files on disk (apk content/xattrs).
+* name and path of our lib are the remaining fingerprint. `liboxhk.so` is a bad name; anything
+  that isn't in the game's own lib set is suspicious to a whitelist check.
+
 ## build
 
 ```bash
