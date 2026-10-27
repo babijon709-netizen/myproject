@@ -19,6 +19,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.os.Bundle;
+import android.os.Looper;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.View;
@@ -74,6 +75,24 @@ public final class MainActivity extends Activity {
         });
         root.addView(run, lp());
 
+        Button stage1 = new Button(this);
+        stage1.setText("1. start game application");
+        stage1.setAllCaps(false);
+        stage1.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { stage1(); }
+        });
+        root.addView(stage1, lp());
+
+        Button stage2 = new Button(this);
+        stage2.setText("2. launch unity");
+        stage2.setAllCaps(false);
+        stage2.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                startActivity(new Intent(MainActivity.this, UnityActivity.class));
+            }
+        });
+        root.addView(stage2, lp());
+
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         Button share = new Button(this);
@@ -105,7 +124,10 @@ public final class MainActivity extends Activity {
                 0, 1f));
 
         setContentView(root);
-        append("tap 'run probe'");
+        Sandbox.setLog(new Sandbox.Log() {
+            @Override public void line(final String s) { append(s); }
+        });
+        append("probe = measurements, 1/2 = the container itself");
     }
 
     private LinearLayout.LayoutParams lp() {
@@ -113,9 +135,15 @@ public final class MainActivity extends Activity {
                 ViewGroup.LayoutParams.WRAP_CONTENT);
     }
 
-    private void append(String s) {
+    private void append(final String s) {
         Log.i(TAG, s);
-        log.append(s + "\n");
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            log.append(s + "\n");
+        } else {
+            runOnUiThread(new Runnable() {
+                @Override public void run() { log.append(s + "\n"); }
+            });
+        }
     }
 
     private void copyLog() {
@@ -138,6 +166,16 @@ public final class MainActivity extends Activity {
         i.putExtra(Intent.EXTRA_TEXT, log.getText().toString());
         i.putExtra(Intent.EXTRA_STREAM, android.net.Uri.fromFile(f));
         startActivity(Intent.createChooser(i, "share probe log"));
+    }
+
+    private void stage1() {
+        try {
+            append("\n== stage 1: game application");
+            Sandbox.get(this).startApplication();
+        } catch (Throwable t) {
+            append("FAILED: " + t);
+            Log.e(TAG, "stage 1", t);
+        }
     }
 
     private void go() {

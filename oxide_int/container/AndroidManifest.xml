@@ -19,6 +19,14 @@
         android:theme="@android:style/Theme.Material.NoActionBar">
 
         <activity
+            android:name=".UnityActivity"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density"
+            android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen" />
+
+        <activity
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden">
