@@ -419,3 +419,25 @@ server-side signature/Integrity verdict on login is fatal for the account and no
 touches it. Test on a throwaway account on an offline/event server, not on the main one.
 Google/Facebook sign-in binds the app signature too — expect it to fail or to require the
 signature hash re-patched in the client.
+
+### sandbox: the asset path bug (found 2026-10-28)
+
+Device log proved two things at once:
+
+* all-files access does **not** open another app's `Android/data/<pkg>` on Android 11+ —
+  `isExternalStorageManager: true` and still `ENOENT`. That route is dead.
+* `libunity.so` has no hardcoded `Android/data`; it calls `getExternalFilesDir` /
+  `getExternalCacheDir` over JNI, so data paths follow the *context*, not the spoofed name.
+
+The real blocker was ours: the manually built `AssetManager` listed the game's top-level assets
+(`audience_network`, `mraid.js`, `bin`, …) but `open("assets/bin/Data/unity_app_guid")` threw
+`FileNotFoundException` — and Unity then decides the il2cpp resources are not extracted, tries to
+re-extract them, fails the space check and shows `Not enough storage space…`.
+
+Fix in `Sandbox.init()`: ask the system for the package's resources
+(`pm.getResourcesForApplication(ai)` → `getAssets()`), which is built with the package's real apk
+and split paths, and fall back to the manual `addAssetPath` path only if that one cannot open
+`assets/bin/Data/unity_app_guid`. Each `addAssetPath` cookie is logged separately (they used to be
+summed, which hid a failed base path), both key forms are probed (`assets/bin/Data/...` and
+`bin/Data/...`, since Play Asset Delivery packs may root assets differently), and the chosen
+manager's `list()` for `bin`, `bin/Data`, `assets/bin`, `assets/bin/Data` is printed.
