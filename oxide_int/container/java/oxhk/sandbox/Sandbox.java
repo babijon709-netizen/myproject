@@ -34,16 +34,16 @@ public final class Sandbox {
     public static final String GAME = "com.catsbit.oxidesurvivalisland";
     private static final String TAG = "oxhk.sandbox";
 
-    public interface Log { void line(String s); }
+    public interface Sink { void line(String s); }
 
     private static Sandbox instance;
-    private static Log log;
+    private static Sink log;
 
-    public static void setLog(Log l) { log = l; }
+    public static void setLog(Sink l) { log = l; }
 
     static void say(String s) {
         Log.i(TAG, s);
-        Log l = log;
+        Sink l = log;
         if (l != null) l.line(s);
     }
 

@@ -124,7 +124,7 @@ public final class MainActivity extends Activity {
                 0, 1f));
 
         setContentView(root);
-        Sandbox.setLog(new Sandbox.Log() {
+        Sandbox.setLog(new Sandbox.Sink() {
             @Override public void line(final String s) { append(s); }
         });
         append("probe = measurements, 1/2 = the container itself");
