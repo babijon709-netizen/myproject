@@ -69,14 +69,13 @@ echo "== link apk"
 
 echo "== stuff dex + assets"
 ( cd "$OUT/dex" && zip -0 -X -q "$OUT/apk/unsigned.apk" classes.dex )
-( cd "$OUT/assets" && zip -0 -X -q "$OUT/apk/unsigned.apk" classes.dex liboxhk.so oXhk.p12 )
 python3 - "$OUT/apk/unsigned.apk" "$OUT/assets" <<'PY'
 import sys, zipfile
 apk, assets = sys.argv[1], sys.argv[2]
 mapping = {
     'classes.dex': 'assets/payload/classes.dex',
     'liboxhk.so':  'assets/payload/liboxhk.so',
-    'oXhk.p12':    'assets/oxhk.p12',
+    'oxhk.p12':    'assets/oxhk.p12',
 }
 with zipfile.ZipFile(apk, 'a', zipfile.ZIP_STORED) as z:
     for src, dst in mapping.items():
