@@ -1,10 +1,13 @@
-// Pack.java — rebuild the game's APKs with the payload inside, on the device, no tools.
+// Pack.java — rebuild the game's APKs with the payload inside, on the device, no tooling.
 //
-// base.apk : manifest's android:name -> oxhk.App, payload dex added as classes<N+1>.dex
-// split    : liboxhk.so added to lib/arm64-v8a/ (STORED)
+// base.apk          : manifest's android:name -> oxhk.App, payload dex as classes<N+1>.dex
+// arm64 split       : liboxhk.so added to lib/arm64-v8a/ (STORED)
+// every other split : copied through untouched (still has to be re-signed, the app must be
+//                     one certificate), streamed entry by entry so a 92 MB asset pack does not
+//                     have to fit in the heap.
 //
-// Old signature files are dropped, both outputs are re-signed afterwards (Sign.java). The APKs
-// keep everything else byte for byte, so the packer's own files are untouched.
+// Old signature files are dropped; both outputs get re-signed afterwards (Sign.java). Everything
+// else is copied byte for byte, so the packer's own files are untouched.
 
 package oxhk.injector;
 
@@ -14,29 +17,20 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.Enumeration;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 public final class Pack {
-    private static final Set<String> DROP = new HashSet<String>();
-
-    static {
-        DROP.add("META-INF/MANIFEST.MF");
-    }
-
     private Pack() {}
 
     private static boolean isSignatureFile(String name) {
         String n = name.toUpperCase();
         if (!n.startsWith("META-INF/")) return false;
-        return n.endsWith(".SF") || n.endsWith(".RSA") || n.endsWith(".DSA") || n.endsWith(".EC");
+        return n.endsWith(".SF") || n.endsWith(".RSA") || n.endsWith(".DSA") || n.endsWith(".EC")
+                || n.equals("META-INF/MANIFEST.MF");
     }
 
     public static String baseApplicationName(File baseApk) throws IOException {
@@ -46,6 +40,19 @@ public final class Pack {
             return Axml.originalApplicationName(readAll(z.getInputStream(e)));
         } finally {
             z.close();
+        }
+    }
+
+    /** true when this split carries the ARM64 native lib set (that is the one we patch). */
+    public static boolean hasArm64Il2Cpp(File apk) {
+        ZipFile z = null;
+        try {
+            z = new ZipFile(apk);
+            return z.getEntry("lib/arm64-v8a/libil2cpp.so") != null;
+        } catch (Throwable t) {
+            return false;
+        } finally {
+            if (z != null) try { z.close(); } catch (IOException ignored) {}
         }
     }
 
@@ -66,71 +73,66 @@ public final class Pack {
     }
 
     /** base.apk -> patched, unsigned, with the payload dex inside. */
-    public static String patchBase(File in, File out, byte[] payloadDex, String newAppClass) throws IOException {
+    public static String patchBase(File in, File out, byte[] payloadDex, String newAppClass)
+            throws IOException {
         ZipFile z = new ZipFile(in);
         try {
             int slot = nextDexSlot(z);
-            List<String> extraNames = new ArrayList<String>();
-            List<byte[]> extraData = new ArrayList<byte[]>();
 
             ZipEntry manifest = z.getEntry("AndroidManifest.xml");
             if (manifest == null) throw new IOException("no AndroidManifest.xml in base.apk");
             byte[] axml = readAll(z.getInputStream(manifest));
             String orig = Axml.originalApplicationName(axml);
             byte[] patched = Axml.patchApplicationName(axml, newAppClass);
-            if (patched == null) throw new IOException("could not patch <application android:name> ("
-                    + orig + ")");
+            if (patched == null)
+                throw new IOException("could not patch <application android:name> (" + orig + ")");
 
-            extraNames.add("classes" + slot + ".dex");
-            extraData.add(payloadDex);
-
-            FileOutputStream fos = new FileOutputStream(out);
-            ZipOutputStream zos = new ZipOutputStream(fos);
+            ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(out));
             try {
                 Enumeration<? extends ZipEntry> en = z.entries();
                 while (en.hasMoreElements()) {
                     ZipEntry e = en.nextElement();
                     String name = e.getName();
-                    if (isSignatureFile(name) || DROP.contains(name)) continue;
+                    if (isSignatureFile(name)) continue;
+                    if (name.equals("AndroidManifest.xml")) {
+                        putBytes(zos, name, patched, false);
+                        continue;
+                    }
                     if (name.startsWith("classes") && name.endsWith(".dex")) {
-                        int s = -1;
                         String mid = name.substring("classes".length(), name.length() - 4);
+                        int s = -1;
                         if (!mid.isEmpty()) {
                             try { s = Integer.parseInt(mid); } catch (NumberFormatException ignored) {}
                         }
-                        if (s == slot) continue;   // never collide
+                        if (s == slot) continue;   // never collide with ours
                     }
-                    byte[] data = readAll(z.getInputStream(e));
-                    if (name.equals("AndroidManifest.xml")) data = patched;
-                    put(zos, name, data, false);
+                    copyThrough(zos, e, z.getInputStream(e));
                 }
-                for (int i = 0; i < extraNames.size(); i++) put(zos, extraNames.get(i), extraData.get(i), false);
+                putBytes(zos, "classes" + slot + ".dex", payloadDex, false);
             } finally {
                 zos.close();
             }
-            return "classes" + slot + ".dex  (was " + orig + " -> " + newAppClass + ")";
+            return "classes" + slot + ".dex  (" + orig + " -> " + newAppClass + ")";
         } finally {
             z.close();
         }
     }
 
-    /** split_config.arm64_v8a.apk -> same split with liboxhk.so inside. */
-    public static void patchSplit(File in, File out, byte[] lib) throws IOException {
+    /** split -> same split with liboxhk.so inside (inject) or copied through as is. */
+    public static void patchSplit(File in, File out, byte[] lib, boolean inject) throws IOException {
         ZipFile z = new ZipFile(in);
         try {
-            FileOutputStream fos = new FileOutputStream(out);
-            ZipOutputStream zos = new ZipOutputStream(fos);
+            ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(out));
             try {
                 Enumeration<? extends ZipEntry> en = z.entries();
-                boolean had = false;
                 while (en.hasMoreElements()) {
                     ZipEntry e = en.nextElement();
                     String name = e.getName();
-                    if (isSignatureFile(name) || DROP.contains(name)) continue;
-                    if (name.equals("lib/arm64-v8a/liboxhk.so")) { had = true; continue; }
-                    put(zos, name, readAll(z.getInputStream(e)), false);
+                    if (isSignatureFile(name)) continue;
+                    if (inject && name.equals("lib/arm64-v8a/liboxhk.so")) continue;
+                    copyThrough(zos, e, z.getInputStream(e));
                 }
-                if (!had) put(zos, "lib/arm64-v8a/liboxhk.so", lib, true);
+                if (inject) putBytes(zos, "lib/arm64-v8a/liboxhk.so", lib, true);
             } finally {
                 zos.close();
             }
@@ -139,8 +141,32 @@ public final class Pack {
         }
     }
 
-    // STORED for native libs (keeps them mmap-friendly), DEFLATED for everything else
-    private static void put(ZipOutputStream zos, String name, byte[] data, boolean stored) throws IOException {
+    // ── zip helpers ─────────────────────────────────────────────────────────────────────
+
+    /** stream an unchanged entry: keeps its method and its (already known) crc/size. */
+    private static void copyThrough(ZipOutputStream zos, ZipEntry e, InputStream in) throws IOException {
+        try {
+            ZipEntry o = new ZipEntry(e.getName());
+            if (e.getMethod() == ZipEntry.STORED) {
+                o.setMethod(ZipEntry.STORED);
+                o.setSize(e.getSize());
+                o.setCompressedSize(e.getSize());
+                o.setCrc(e.getCrc());
+            } else {
+                o.setMethod(ZipEntry.DEFLATED);
+            }
+            zos.putNextEntry(o);
+            byte[] buf = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) zos.write(buf, 0, n);
+            zos.closeEntry();
+        } finally {
+            in.close();
+        }
+    }
+
+    private static void putBytes(ZipOutputStream zos, String name, byte[] data, boolean stored)
+            throws IOException {
         ZipEntry e = new ZipEntry(name);
         if (stored) {
             CRC32 crc = new CRC32();
@@ -170,7 +196,6 @@ public final class Pack {
     }
 
     static byte[] readFile(File f) throws IOException {
-        InputStream in = new FileInputStream(f);
-        return readAll(in);
+        return readAll(new FileInputStream(f));
     }
 }
