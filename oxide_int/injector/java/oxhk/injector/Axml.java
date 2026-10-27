@@ -40,6 +40,12 @@ public final class Axml {
             int idx = findApplicationNameAttr(out, p);
             if (idx < 0) return null;
             if (!p.rewrite(out, idx, newName)) return null;
+            // read it back: the pool must still parse, the count must be unchanged and the
+            // entry must now be the new name. Cheap insurance against a broken manifest.
+            Pool check = readPool(out);
+            if (check.stringCount != p.stringCount) return null;
+            if (!newName.equals(check.get(idx))) return null;
+            if (!"application".equals(findElement(check, "application"))) return null;
             return out;
         } catch (Throwable t) {
             return null;
@@ -81,10 +87,9 @@ public final class Axml {
                 int p2 = off + r1[1];
                 int[] r2 = u8len(buf, p2);
                 int start = p2 + r2[1];
-                cap = totalUtf8Entry(buf, off) - (start - off);
+                cap = r2[0];                    // the string's own bytes — never past them
                 byte[] enc = value.getBytes(UTF8);
                 if (enc.length > cap) return false;
-                // keep both length prefixes the way they are when they still fit
                 if (enc.length != r2[0]) {
                     if (r2[1] != 1) return false;      // don't re-encode multi-byte lengths
                     buf[p2] = (byte) enc.length;
@@ -111,13 +116,6 @@ public final class Axml {
             }
         }
 
-        private int totalUtf8Entry(byte[] buf, int off) {
-            // walk until the terminator; used only to bound the writable window
-            int[] r1 = u8len(buf, off);
-            int p = off + r1[1];
-            int[] r2 = u8len(buf, p);
-            return (p + r2[1] + r2[0] + 1 + 4096);  // generous: callers clamp with the pool end
-        }
     }
 
     private static int[] u8len(byte[] b, int p) {
@@ -195,6 +193,22 @@ public final class Axml {
             if ("dtGga4.sNBtq9.vRXcl4.pm7o47".equals(s)) return i;
         }
         return -1;
+    }
+
+    private static String findElement(Pool pool, String wanted) {
+        byte[] axml = pool.data;
+        int off = le16(axml, 2);
+        while (off + 8 <= axml.length) {
+            int type = le16(axml, off);
+            int size = le32(axml, off + 4);
+            if (size <= 0 || off + size > axml.length) break;
+            if (type == RES_XML_START_ELEMENT_TYPE) {
+                String e = pool.get(le32(axml, off + 20));
+                if (wanted.equals(e)) return e;
+            }
+            off += size;
+        }
+        return null;
     }
 
     static int le16(byte[] b, int o) { return (b[o] & 0xff) | ((b[o + 1] & 0xff) << 8); }
