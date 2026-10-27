@@ -277,6 +277,48 @@ gh run watch
 `probe: true` on a manual run builds the re-signed-but-clean variant — the signature test from
 the section above, straight from CI.
 
+
+## injector APK (patch on the phone, no PC)
+
+`tools/build_injector.sh` → `build/injector/oXhk-injector.apk` (also built by CI on every push,
+artifact `oxhk-injector-apk`). One screen, one button:
+
+1. reads the installed game: `applicationInfo.sourceDir` + `splitSourceDirs`
+   (`/data/app/.../base.apk` is world-readable, no root needed)
+2. **base.apk**: rewrites the manifest's `<application android:name>` string in place — the
+   binary XML string pool entry for `dtGga4.sNBtq9.vRXcl4.pm7o47` becomes `oxhk.App` (shorter,
+   so no offsets move, tail is zero-filled). Adds the payload dex as `classes<N+1>.dex`.
+3. **split**: adds `lib/arm64-v8a/liboxhk.so` (STORED)
+4. drops old `META-INF/*.SF|RSA|DSA|EC`, signs both with **apksig** (the lib inside
+   `build-tools/*/lib/apksigner.jar`, v1+v2+v3) using a PKCS12 key baked into the injector's
+   assets at build time
+5. hands base+split to `PackageInstaller` in one session (`MODE_FULL_INSTALL`), so the system
+   installs them as one app
+
+`oxhk.App` is compiled against a stub of the game's Application class
+(`injector/stub/java/dtGga4/.../pm7o47.java`); the stub is kept out of the payload dex, so at
+runtime the superclass resolves to the real one and the packer's `<clinit>`
+(`System.loadLibrary("loader")`) still runs. `super.onCreate()` first, then `Oxhk.install()`.
+
+Install:
+
+```bash
+adb install -r oxide_int/build/injector/oXhk-injector.apk
+# on the phone: allow "install unknown apps", open it, tap patch + install
+# it will ask to uninstall the store build first — signature changed
+```
+
+The keystore lives at `build/injector/oxhk.p12` (pass `oxhkpass`, alias `oxhk`) — **keep it**,
+every later patch must be signed with the same key to install over the previous one. The
+certificate SHA-256 is printed on the injector's screen (that's what the game/server sees
+instead of the store signature).
+
+CI additions: the `injector` job runs `bash -x tools/build_injector.sh`, uploads
+`oxhk-injector-apk`, and on failure commits the log back as `ci-last-failure.log` (same trick as
+the payload job). Two pitfalls already fixed there: `javac` against `android.jar` has no
+`LambdaMetafactory` (no lambdas anywhere in this tree), and `apksig` must be dexed together with
+the injector classes.
+
 ## known gaps / FILL
 
 * `vitals_health = 0xB8` (`Ksd`, float right after `m_DamageMultipliers`) — the property
