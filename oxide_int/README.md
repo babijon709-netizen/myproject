@@ -325,6 +325,36 @@ the payload job). Two pitfalls already fixed there: `javac` against `android.jar
 the injector classes.
 
 
+## container (route B) — probe results, then stages
+
+Measured on the device with `oxhk-sandbox-apk` (Android 14 class ROM, targetSdk 34):
+
+| probe | result |
+|---|---|
+| `dlopen` game lib from `/data/app/.../lib/arm64` | **OK** (mode 0755, `X_OK` allowed) |
+| `dlopen` copy in app data dir | **OK** (W^X did not bite here) |
+| `android_dlopen_ext` over memfd | OK |
+| `/proc/self/maps` | 2287 lines, game libs appear under the game's own `/data/app` path |
+| `ActivityThread.currentActivityThread` / `VMRuntime.getRuntime` | reflectable |
+| game Application class from its own dex, `initialize=true` | **`<clinit>` OK — the packer loaded its libs inside our process** |
+
+Consequences: the container does **not** ship the game's libs, and does not need the
+`Activity.attach()` surgery other cloners use. The game's apks stay untouched and store-signed,
+so signature and repack checks see exactly what the store shipped.
+
+`container/java/oxhk/sandbox/Sandbox.java` (stage 1) — one `AssetManager` with base + all splits,
+`DexClassLoader` over the game's dex with the game's lib dir as the library search path, a
+`ContextWrapper` that answers with the game's package name, then the game's real `Application`
+attached and `onCreate()`ed.
+`container/java/oxhk/sandbox/UnityActivity.java` (stage 2) — our own activity *is* the game's
+host: it overrides `getPackageName/getAssets/getResources/getClassLoader/getApplicationInfo`,
+constructs `com.unity3d.player.UnityPlayer` with itself and forwards the lifecycle. No manifest
+replacement, no reflection into `Activity.attach`, nothing written into the game.
+Buttons: `1. start game application`, `2. launch unity`, plus the stage-0 probe.
+
+Next: ESP overlay on top of the Unity view (we own the window, so it is a plain `addView`), then
+the menu. Since the process is ours, the payload needs no bootstrap trick at all.
+
 ## container plan (route B): why a probe comes before code
 
 A dual-space container (VirtualApp style) would leave the game's apks bit-identical and store-signed,
