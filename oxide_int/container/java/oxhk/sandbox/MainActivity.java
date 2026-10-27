@@ -83,6 +83,25 @@ public final class MainActivity extends Activity {
         });
         root.addView(stage1, lp());
 
+        Button stage3 = new Button(this);
+        stage3.setText("3. grant all-files access (for the game's data dir)");
+        stage3.setAllCaps(false);
+        stage3.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { allFiles(); }
+        });
+        root.addView(stage3, lp());
+
+        Button logs = new Button(this);
+        logs.setText("dump logcat");
+        logs.setAllCaps(false);
+        logs.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                append("\n== logcat (this process)");
+                append(Logs.recent(4000));
+            }
+        });
+        root.addView(logs, lp());
+
         Button stage2 = new Button(this);
         stage2.setText("2. launch unity");
         stage2.setAllCaps(false);
@@ -124,6 +143,13 @@ public final class MainActivity extends Activity {
                 0, 1f));
 
         setContentView(root);
+        Logs.installCrashHandler(this);
+        String crash = Logs.lastCrash(this);
+        if (crash.length() > 0) {
+            append("== last crash (previous run)");
+            append(crash);
+            Logs.clearCrash(this);
+        }
         Sandbox.setLog(new Sandbox.Sink() {
             @Override public void line(final String s) { append(s); }
         });
@@ -166,6 +192,39 @@ public final class MainActivity extends Activity {
         i.putExtra(Intent.EXTRA_TEXT, log.getText().toString());
         i.putExtra(Intent.EXTRA_STREAM, android.net.Uri.fromFile(f));
         startActivity(Intent.createChooser(i, "share probe log"));
+    }
+
+    /** the game's data dir is /storage/emulated/0/Android/data/<game>/ — we may only write there
+     *  with all-files access, and Unity computes persistentDataPath from the package name. */
+    private void allFiles() {
+        try {
+            boolean ok = android.os.Environment.isExternalStorageManager();
+            append("isExternalStorageManager: " + ok);
+            if (!ok) {
+                android.content.Intent i = new android.content.Intent(
+                        android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        android.net.Uri.parse("package:" + getPackageName()));
+                startActivity(i);
+                append("grant it in the settings screen that just opened, then come back");
+                return;
+            }
+            File dir = new File("/storage/emulated/0/Android/data/" + Sandbox.GAME + "/files");
+            boolean made = dir.exists() || dir.mkdirs();
+            File probe = new File(dir, "oxhk-write-test");
+            boolean wrote = false;
+            try {
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(probe);
+                fos.write(42);
+                fos.close();
+                wrote = true;
+                probe.delete();
+            } catch (Throwable t) {
+                append("write failed: " + t);
+            }
+            append("game data dir: " + dir + " exists=" + made + " writable=" + wrote);
+        } catch (Throwable t) {
+            append("allFiles failed: " + t);
+        }
     }
 
     private void stage1() {

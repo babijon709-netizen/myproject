@@ -74,6 +74,10 @@ public final class UnityActivity extends Activity {
     // ── boot ──────────────────────────────────────────────────────────────────────────────
 
     private void boot() throws Exception {
+        log("pkg=" + getPackageName());
+        log("files=" + getFilesDir());
+        log("external=" + getExternalFilesDir(null));
+        log("libs=" + getApplicationInfo().nativeLibraryDir);
         ClassLoader cl = s.loader();
 
         // IUnityPlayerLifecycleEvents: two methods, so a Proxy is enough
