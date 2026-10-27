@@ -41,8 +41,8 @@ Game side:
 
 No inline hooks and no patching of the game's own libs. Java posts a per-frame callback on
 the Android UI thread; Unity runs its script loop on that same thread, so all managed calls
-land where the game expects them. Touches for aim are injected as `MotionEvent`s into the
-game's own view — nothing is written into game memory.
+land where the game expects them. Only the menu consumes touches; everything else goes to the
+game. Nothing is ever written into game memory.
 
 
 ## the APK this targets
@@ -241,12 +241,41 @@ adb logcat -s oxhk
 ## use
 
 `oxhk` badge, top-left → tap = menu (drag it by the title bar).
-Tabs: **ESP** (esp / boxes / clean / teamcheck) · **AIM** (aim / fov / smooth / gain / touchms /
-cooldown) · **CFG** (save / load / reset / close). Config lives in
-`/data/data/<pkg>/files/oxhk.json`.
+Build is **ESP only** right now (no aim, no touch injection at all). Menu: `oxhk` badge top-left
+opens it, drag by the title bar, rows are
 
-Boxes are drawn from `Animator.GetBoneTransform(Head)` → `Hips`, so the box follows the rig.
-`clean` = head dot + distance only. Team colour comes from `kai.team` pointer equality.
+`esp` · `boxes` · `names` · `health` · `distance` · `team check` · `range` · `save` · `reload` · `close`
+
+Config lives in `/data/data/com.catsbit.oxidesurvivalisland/files/oxhk.json`.
+
+Boxes come from `Animator.GetBoneTransform(Head)` and `(Hips)`, so they follow the rig instead of
+being a fixed-size square. Team colour is `kai.team` pointer equality — team members draw blue
+and are never counted in the `Ne` counter in the title bar.
+
+
+## CI
+
+`.github/workflows/build.yml`, triggered on **every push** (and on `v*` tags, plus manual runs):
+
+* `payload` — sets up JDK 17, takes the runner's preinstalled SDK/NDK, runs
+  `oxide_int/tools/build.sh --no-apk`, uploads `liboxhk.so` + `classes.dex` as the
+  `oxhk-payload` artifact. This is the green build you get from any push.
+* `repack` — only when the game apks are reachable. Pulls latest apktool, downloads both apks,
+  sanity-checks that the split really contains `lib/arm64-v8a/libil2cpp.so`, then runs the full
+  `build.sh base.apk split.apk` and uploads `oxhk-apk`. On a `v*` tag it also attaches the apks
+  to the GitHub release.
+
+Where the apks come from, in order: the `base_apk_url` / `split_apk_url` inputs on a manual run,
+or a repo secret `GAME_APKS_URL` pointing at a two-line manifest (line 1 = base.apk url,
+line 2 = split url). Nothing game-sized is committed to the repo.
+
+```bash
+gh workflow run build -f base_apk_url=https://... -f split_apk_url=https://...
+gh run watch
+```
+
+`probe: true` on a manual run builds the re-signed-but-clean variant — the signature test from
+the section above, straight from CI.
 
 ## known gaps / FILL
 
@@ -254,12 +283,9 @@ Boxes are drawn from `Animator.GetBoneTransform(Head)` → `Hips`, so the box fo
   `PlayerVitals.XTp/XTJ/XTa` accessors are not named `get_*` in this dump, so the field was
   picked by layout. Verify once: read `vitals+0xB8` and compare with the HUD health number,
   or call `kAr<float>::Lbu` (RVA 0xBD36858) if health turns out to be a reactive value.
-* aim = injected single-pointer swipe. While He is holding the fire button with the same
-  finger the game sees one pointer, so aim and fire can't share a finger — that's a real
-  limitation of touch synthesis inside the same view, not a bug in the offsets.
-* `gain` (touch px per screen px) is per-game sensitivity. Default 1.0 is "aim moves as far
-  as the finger would"; tune it in AIM tab until a 100 px delta lands on the head.
 * no visibility raycast — ESP draws everyone in `clientPlayerList`, through walls.
+* names come from `Di.nickname` → `Text.m_Text`; if the game swaps the label component the row
+  goes blank instead of crashing (checked every 300 ms, `null` entries are skipped).
 
 ## risk
 

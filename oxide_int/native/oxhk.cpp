@@ -1,21 +1,16 @@
-// liboxhk.so — internal (in-process) tool for Oxide / HyperHug, build 11978.
+// liboxhk.so — in-process ESP for Oxide / HyperHug, build 11978. No root, no hooks.
 //
-// Offsets come from dump11978.7z -> Il2CppDumper: dump.cs (field offsets, layouts) and
-// script.json (method RVAs, TypeInfoPointers metadata-usage slots). Nothing is guessed
-// from a different build.
+// Offsets come from dump11978.7z (Il2CppDumper): dump.cs gives field offsets, script.json gives
+// method RVAs and the TypeInfoPointers metadata-usage slots. libil2cpp.so in the split is the
+// same binary as in the dump (md5 e3c232f144a398d2c60c643aa2663b65), so every RVA applies.
 //
-// Why there is no il2cpp API here:
-//   this libil2cpp.so exports zero `il2cpp_*` symbols (dynsym = libc + Brotli/ICU only) and
-//   its code sits in a renamed PT_LOAD section named "il2cpp" instead of ".text" — the build
-//   is export-stripped / section-renamed. So no dlsym for il2cpp_domain_get & friends.
-//   Everything is `il2cpp_base + RVA`; fields are `obj + offset`; the handful of managed
-//   calls we need (Transform.get_position, Camera matrices, Animator.GetBoneTransform) are
-//   direct calls into their AOT entry points with MethodInfo = nullptr.
+// This build's libil2cpp.so exports no il2cpp_* symbols at all (its code even lives in a PT_LOAD
+// section named "il2cpp" instead of .text), so there is no API to call: everything is
+// il2cpp_base + RVA, fields are obj + offset, and the handful of managed functions we need are
+// entered directly with MethodInfo = nullptr. No inline hooks, nothing written into game code.
 //
-// Execution model:
-//   no inline hooks, no code patching inside the game's libs. Java posts a per-frame callback
-//   on the Android UI thread and Unity runs its script loop on that same thread, so every
-//   managed call happens on the thread the game expects.
+// Threading: Java drives nativeTick() from a per-frame callback on the Android UI thread, which
+// is the same thread Unity runs its script loop on.
 
 #include <jni.h>
 #include <android/log.h>
@@ -34,7 +29,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-// ── libil2cpp.so RVAs (dump.cs "VA" column == base + RVA) ────────────────────────────────
+// ── libil2cpp.so RVAs (dump.cs "VA" == base + RVA) ──────────────────────────────────────
 namespace il2dump {
 constexpr uint64_t Camera_get_main                = 0xD43AB4C;  // static Camera FindMainCamera()
 constexpr uint64_t Camera_worldToCameraMatrix     = 0xD43929C;
@@ -48,33 +43,25 @@ constexpr uint64_t NetworkBehaviour_isLocalPlayer = 0xC8D8774;
 
 // metadata-usage slots holding Il2CppClass* (script.json -> TypeInfoPointers)
 constexpr uint64_t TI_PlayerManager = 0xE66DEE8;  // Oxide.PlayerManager
-constexpr uint64_t TI_PlayerVitals  = 0xE66DF50;  // Oxide.PlayerVitals
 constexpr uint64_t TI_Camera        = 0xE666348;  // UnityEngine.Camera
 constexpr uint64_t TI_Animator      = 0xE6651F0;  // UnityEngine.Animator
-constexpr uint64_t TI_ListPlayerMgr = 0xE65E8A8;  // List<Oxide.PlayerManager>
 }  // namespace il2dump
 
 namespace il2 = il2dump;
 
-// ── offsets (dump.cs) ────────────────────────────────────────────────────────────────────
+// ── field offsets (dump.cs) ─────────────────────────────────────────────────────────────
 namespace off {
-// Oxide.PlayerManager : Mirror.NetworkBehaviour
 constexpr size_t pm_vitals         = 0xC8;   // Oxide.PlayerVitals
 constexpr size_t pm_team           = 0x120;  // kai
 constexpr size_t pm_nicklabel      = 0x130;  // Di
 constexpr size_t pm_characterModel = 0x150;  // GameObject
 constexpr size_t pm_animator       = 0x1B0;  // Animator
-// statics of PlayerManager, offsets inside static_fields
-constexpr size_t pm_static_client  = 0x10;   // List<PlayerManager> clientPlayerList
-// Oxide.GenericVitals <- Oxide.kAg <- Mirror.NetworkBehaviour
-constexpr size_t vitals_maxHealth  = 0x88;
-constexpr size_t vitals_health     = 0xB8;
-// kai (team component)
-constexpr size_t kai_team          = 0x98;   // Cu
-// Di (nick label)
-constexpr size_t di_nickname       = 0x38;   // UnityEngine.UI.Text
-// UnityEngine.UI.Text
-constexpr size_t text_m_Text       = 0xE0;   // string
+constexpr size_t pm_static_client  = 0x10;   // static List<PlayerManager> clientPlayerList
+constexpr size_t vitals_maxHealth  = 0x88;   // Oxide.GenericVitals.m_MaxHealth
+constexpr size_t vitals_health     = 0xB8;   // current health, see FILL in README
+constexpr size_t kai_team          = 0x98;   // kai.Cu
+constexpr size_t di_nickname       = 0x38;   // Di.nickname (UnityEngine.UI.Text)
+constexpr size_t text_m_Text       = 0xE0;   // Text.m_Text (System.String)
 }  // namespace off
 
 // ── il2cpp layout ───────────────────────────────────────────────────────────────────────
@@ -98,22 +85,19 @@ struct Mat4 { float d[16]; };  // Unity column-major: M[row][col] == d[col * 4 +
 
 // ── config, mirrored from the Java menu ─────────────────────────────────────────────────
 enum : int {
-  kFlagEsp   = 1 << 0,
-  kFlagBoxes = 1 << 1,
-  kFlagClean = 1 << 2,  // head dot + distance only
-  kFlagAim   = 1 << 3,
-  kFlagTeam  = 1 << 4,  // team check on
-  kFlagMenu  = 1 << 5,
+  kFlagEsp  = 1 << 0,
+  kFlagBox  = 1 << 1,
+  kFlagName = 1 << 2,
+  kFlagHp   = 1 << 3,
+  kFlagDist = 1 << 4,
+  kFlagTeam = 1 << 5,  // team check: draw team members blue, never counted as "enemy"
+  kFlagMenu = 1 << 6,
 };
 
 struct Config {
-  int   flags         = kFlagEsp | kFlagBoxes | kFlagTeam | kFlagMenu;
-  float fovPx         = 260.f;
-  float smoothing     = 4.f;
-  float gain          = 1.f;
-  int   touchMs       = 40;
-  int   headBone      = 10;   // HumanBodyBones.Head
-  int   aimCooldownMs = 30;
+  int  flags   = kFlagEsp | kFlagBox | kFlagHp | kFlagDist | kFlagTeam | kFlagMenu;
+  int  headBone = 10;  // HumanBodyBones.Head
+  float maxDist = 0.f; // 0 = no limit
 };
 static Config g_cfg;
 
@@ -124,9 +108,8 @@ static void* g_klass_camera = nullptr;
 static void* g_klass_animator = nullptr;
 static void* g_camera = nullptr;
 static int   g_screenW = 1080, g_screenH = 2400;
-static long long g_lastAimMs = 0;
 static bool  g_ready = false;
-static std::vector<std::string> g_lastNames;
+static std::vector<std::string> g_names;
 
 // ── helpers ─────────────────────────────────────────────────────────────────────────────
 static inline bool inproc(const void* p) { return (uintptr_t)p > 0x10000; }
@@ -155,7 +138,7 @@ static inline bool klass_name_is(void* klass, const char* want) {
   return strcmp(n, want) == 0;
 }
 
-// metadata-usage slot -> Il2CppClass*; the slot is filled lazily by the game, so retry each tick
+// metadata-usage slot -> Il2CppClass*; the slot is filled lazily by the runtime, so retry
 static void* klass_from_slot(uint64_t slotRva, const char* name, const char* ns) {
   if (!g_base) return nullptr;
   void* k = rd<void*>(g_base + slotRva);
@@ -186,7 +169,7 @@ static std::string read_string(void* str) {
   return out;
 }
 
-// ── managed call shims ──────────────────────────────────────────────────────────────────
+// ── managed call shims (AOT entry points, MethodInfo = nullptr) ─────────────────────────
 static Vec3 transform_position(void* transform) {
   if (!inproc(transform)) return {};
   auto fn = reinterpret_cast<Vec3 (*)(void*, void*)>(g_base + il2::Transform_get_position);
@@ -235,7 +218,7 @@ static int camera_dim(uint64_t rva, void* cam, int fallback) {
 }
 
 // ── math ────────────────────────────────────────────────────────────────────────────────
-static Mat4 mat_mul(const Mat4& a, const Mat4& b) {  // column-major a * b
+static Mat4 mat_mul(const Mat4& a, const Mat4& b) {  // column-major a*b
   Mat4 r{};
   for (int c = 0; c < 4; ++c)
     for (int row = 0; row < 4; ++row) {
@@ -248,8 +231,8 @@ static Mat4 mat_mul(const Mat4& a, const Mat4& b) {  // column-major a * b
 
 struct ScreenPt { float x, y; bool valid; };
 
-// Convention: clip = (P*V) * p with Unity's GL-style projection (NDC y up, screen y bottom-up).
-// The overlay is an Android view, so y is flipped to top-left here.
+// Unity GL projection: clip = (P*V)*p, NDC y up, screen y bottom-up. The overlay is a normal
+// Android view (y down), so y is flipped here.
 static ScreenPt world_to_screen(const Mat4& vp, const Vec3& p, int w, int h) {
   const float* m = vp.d;
   float cx = m[0] * p.x + m[4] * p.y + m[8]  * p.z + m[12];
@@ -273,7 +256,7 @@ static bool resolve_symbols() {
   g_klass_camera   = klass_from_slot(il2::TI_Camera, "Camera", "UnityEngine");
   g_klass_animator = klass_from_slot(il2::TI_Animator, "Animator", "UnityEngine");
   if (!g_klass_pm || !g_klass_camera) return false;
-  LOGI("il2cpp base %p  PlayerManager %p  Camera %p  Animator %p",
+  LOGI("il2cpp %p  PlayerManager %p  Camera %p  Animator %p",
        (void*)g_base, g_klass_pm, g_klass_camera, g_klass_animator);
   return true;
 }
@@ -318,32 +301,19 @@ static std::string player_name(void* pm) {
   return read_string(rd<void*>((uintptr_t)text + off::text_m_Text));
 }
 
-// ── frame build ─────────────────────────────────────────────────────────────────────────
-static long long now_ms() {
-  timespec ts{};
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return static_cast<long long>(ts.tv_sec) * 1000 + ts.tv_nsec / 1000000;
-}
-
-struct FrameOut {
-  int   aim = 0;
-  float aimDx = 0, aimDy = 0;
-  std::vector<float> ent;                 // 10 floats per entity
-  std::vector<std::string> names;
+// ── frame ───────────────────────────────────────────────────────────────────────────────
+struct Box {
+  float x1, y1, x2, y2, headX, headY, dist, hp, hpMax, flags;
 };
 
-struct Candidate {
-  void* pm;
-  Vec3  head, feet;
-  float hp, hpMax, dist;
-  bool  team;
-};
-
-static void build_frame(FrameOut& fo) {
+static void build_frame(std::vector<Box>& out) {
+  out.clear();
+  g_names.clear();
   if (!g_ready) {
     if (!resolve_symbols()) return;
     g_ready = true;
   }
+  if (!(g_cfg.flags & kFlagEsp)) return;
 
   static int frame = 0;
   if (!inproc(g_camera) || (++frame % 120) == 0) g_camera = main_camera();  // re-resolve on scene load
@@ -366,15 +336,10 @@ static void build_frame(FrameOut& fo) {
   if (local) {
     void* anim = player_animator(local);
     void* t = anim ? animator_bone(anim, g_cfg.headBone) : nullptr;
-    if (!t) {
-      void* go = rd<void*>((uintptr_t)local + off::pm_characterModel);
-      t = gameobject_transform(go);
-    }
+    if (!t) t = gameobject_transform(rd<void*>((uintptr_t)local + off::pm_characterModel));
     if (t) localPos = transform_position(t);
   }
 
-  std::vector<Candidate> cands;
-  cands.reserve(players.size());
   for (void* pm : players) {
     if (pm == local) continue;
     void* anim = player_animator(pm);
@@ -383,58 +348,34 @@ static void build_frame(FrameOut& fo) {
     if (!headT) continue;
     void* hipsT = animator_bone(anim, 0);  // HumanBodyBones.Hips
 
-    Candidate c{};
-    c.pm   = pm;
-    c.head = transform_position(headT);
-    c.feet = hipsT ? transform_position(hipsT) : Vec3{c.head.x, c.head.y - 1.6f, c.head.z};
-    c.team = (g_cfg.flags & kFlagTeam) != 0 && localCu && player_cu(pm) == localCu;
-    c.dist = local ? dist3(localPos, c.head) : 0.f;
-    c.hpMax = 100.f;
-    c.hp = 0.f;
+    Vec3 head = transform_position(headT);
+    Vec3 hips = hipsT ? transform_position(hipsT) : Vec3{head.x, head.y - 1.6f, head.z};
+    float dist = local ? dist3(localPos, head) : 0.f;
+    if (g_cfg.maxDist > 0.f && dist > g_cfg.maxDist) continue;
+
+    ScreenPt sh = world_to_screen(vp, head, w, h);
+    ScreenPt sf = world_to_screen(vp, hips, w, h);
+    if (!sh.valid) continue;
+    if (sh.x < -w * 0.2f || sh.x > w * 1.2f || sh.y < -h * 0.2f || sh.y > h * 1.2f) continue;
+
+    float boxH = sf.valid ? sf.y - sh.y : 0.f;
+    if (boxH < 8.f || boxH > h * 0.85f) boxH = h * 0.11f;
+    const float boxW = boxH * 0.45f;
+
+    float hpMax = 100.f, hp = 0.f;
     void* vit = rd<void*>((uintptr_t)pm + off::pm_vitals);
     if (inproc(vit)) {
       float mx = rd<float>((uintptr_t)vit + off::vitals_maxHealth);
-      float hp = rd<float>((uintptr_t)vit + off::vitals_health);
-      if (mx > 0.f && mx < 1e5f) c.hpMax = mx;
-      if (hp >= 0.f && hp < 1e5f) c.hp = hp;
+      float cur = rd<float>((uintptr_t)vit + off::vitals_health);
+      if (mx > 0.f && mx < 1e5f) hpMax = mx;
+      if (cur >= 0.f && cur < 1e5f) hp = cur;
     }
-    cands.push_back(c);
-  }
 
-  float bestAim = 1e9f, bestDx = 0, bestDy = 0;
+    const bool team = localCu && player_cu(pm) == localCu && (g_cfg.flags & kFlagTeam);
+    out.push_back(Box{sh.x - boxW * 0.5f, sh.y, sh.x + boxW * 0.5f, sh.y + boxH,
+                      sh.x, sh.y, dist, hp, hpMax, team ? 1.f : 0.f});
 
-  for (const Candidate& c : cands) {
-    ScreenPt sh = world_to_screen(vp, c.head, w, h);
-    ScreenPt sf = world_to_screen(vp, c.feet, w, h);
-    if (sh.valid && sh.x > -w * 0.2f && sh.x < w * 1.2f && sh.y > -h * 0.2f && sh.y < h * 1.2f) {
-      if (g_cfg.flags & kFlagEsp) {
-        float boxH = (sf.valid ? sf.y - sh.y : 0.f);
-        if (boxH < 8.f || boxH > h * 0.85f) boxH = h * 0.11f;
-        const float boxW = boxH * 0.45f;
-        float rec[10] = {sh.x - boxW * 0.5f, sh.y, sh.x + boxW * 0.5f, sh.y + boxH,
-                         sh.x, sh.y, c.dist, c.hp, c.hpMax, c.team ? 1.f : 0.f};
-        fo.ent.insert(fo.ent.end(), rec, rec + 10);
-        fo.names.push_back(player_name(c.pm));
-      }
-    }
-    if (c.team || !(g_cfg.flags & kFlagAim)) continue;
-    if (!sh.valid) continue;
-    float ddx = sh.x - g_screenW * 0.5f;
-    float ddy = sh.y - g_screenH * 0.5f;
-    float d = sqrtf(ddx * ddx + ddy * ddy);
-    if (d > g_cfg.fovPx) continue;
-    if (d < bestAim) { bestAim = d; bestDx = ddx; bestDy = ddy; }
-  }
-
-  if ((g_cfg.flags & kFlagAim) && bestAim < 1e9f) {
-    long long t = now_ms();
-    if (t - g_lastAimMs >= g_cfg.aimCooldownMs) {
-      g_lastAimMs = t;
-      const float s = g_cfg.smoothing > 0.01f ? g_cfg.smoothing : 1.f;
-      fo.aim = 1;
-      fo.aimDx = bestDx / s * g_cfg.gain;
-      fo.aimDy = bestDy / s * g_cfg.gain;
-    }
+    g_names.push_back((g_cfg.flags & kFlagName) ? player_name(pm) : std::string());
   }
 }
 
@@ -444,46 +385,41 @@ Java_oxhk_Oxhk_nativeInit(JNIEnv*, jclass, jstring, jint w, jint h) {
   g_screenW = w > 0 ? w : g_screenW;
   g_screenH = h > 0 ? h : g_screenH;
   g_base = find_module_base("libil2cpp.so");
-  LOGI("init: libil2cpp base %p, screen %dx%d", (void*)g_base, g_screenW, g_screenH);
+  LOGI("init: libil2cpp %p, screen %dx%d", (void*)g_base, g_screenW, g_screenH);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_oxhk_Oxhk_nativeSetConfig(JNIEnv*, jclass, jint flags, jfloat fovPx, jfloat smoothing,
-                               jfloat gain, jint touchMs, jint headBone, jint cooldownMs) {
+Java_oxhk_Oxhk_nativeSetConfig(JNIEnv*, jclass, jint flags, jint headBone, jfloat maxDist) {
   g_cfg.flags = flags;
-  g_cfg.fovPx = fovPx;
-  g_cfg.smoothing = smoothing;
-  g_cfg.gain = gain;
-  g_cfg.touchMs = touchMs;
   g_cfg.headBone = headBone;
-  g_cfg.aimCooldownMs = cooldownMs;
+  g_cfg.maxDist = maxDist;
 }
 
-// out = [0]aim [1]dx [2]dy [3]count, then count * 10 floats; returns count
+// out[0] = count, then 10 floats per entity; returns count
 extern "C" JNIEXPORT jint JNICALL
 Java_oxhk_Oxhk_nativeTick(JNIEnv* env, jclass, jfloatArray out, jint screenW, jint screenH) {
   if (!out) return 0;
   g_screenW = screenW > 0 ? screenW : g_screenW;
   g_screenH = screenH > 0 ? screenH : g_screenH;
 
+  static std::vector<Box> boxes;
+  build_frame(boxes);
+
   const jsize len = env->GetArrayLength(out);
-  if (len < 14) return 0;
-
-  FrameOut fo;
-  build_frame(fo);
-  g_lastNames = fo.names;
-
-  int n = static_cast<int>(fo.names.size());
-  const int maxEnt = (len - 4) / 10;
+  const int maxEnt = (len - 1) / 10;
+  int n = static_cast<int>(boxes.size());
   if (n > maxEnt) n = maxEnt;
 
   jfloat* buf = env->GetFloatArrayElements(out, nullptr);
   if (!buf) return 0;
-  buf[0] = static_cast<float>(fo.aim);
-  buf[1] = fo.aimDx;
-  buf[2] = fo.aimDy;
-  buf[3] = static_cast<float>(n);
-  if (n > 0) memcpy(buf + 4, fo.ent.data(), sizeof(float) * 10 * n);
+  buf[0] = static_cast<float>(n);
+  for (int i = 0; i < n; ++i) {
+    const Box& b = boxes[i];
+    float* p = buf + 1 + i * 10;
+    p[0] = b.x1; p[1] = b.y1; p[2] = b.x2; p[3] = b.y2;
+    p[4] = b.headX; p[5] = b.headY;
+    p[6] = b.dist; p[7] = b.hp; p[8] = b.hpMax; p[9] = b.flags;
+  }
   env->ReleaseFloatArrayElements(out, buf, 0);
   return n;
 }
@@ -493,8 +429,9 @@ Java_oxhk_Oxhk_nativeNames(JNIEnv* env, jclass, jobjectArray out) {
   if (!out) return 0;
   const jsize cap = env->GetArrayLength(out);
   int n = 0;
-  for (const std::string& s : g_lastNames) {
+  for (const std::string& s : g_names) {
     if (n >= cap) break;
+    if (s.empty()) { env->SetObjectArrayElement(out, n, nullptr); ++n; continue; }
     jstring js = env->NewStringUTF(s.c_str());
     env->SetObjectArrayElement(out, n, js);
     env->DeleteLocalRef(js);

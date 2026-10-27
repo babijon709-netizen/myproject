@@ -12,8 +12,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$HERE/build"
-: "${NDK:?set NDK to your ndk dir}"
-: "${SDK:?set SDK to your android sdk dir}"
+: "${SDK:=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}}"
+if [ -z "${NDK:-}" ]; then
+  for cand in "${ANDROID_NDK_HOME:-}" "$SDK/ndk/"*; do
+    [ -n "$cand" ] && [ -d "$cand" ] && NDK="$cand"
+  done
+fi
+[ -n "$SDK" ] && [ -n "$NDK" ] || { echo "set SDK (or ANDROID_HOME) and NDK (or ANDROID_NDK_HOME)"; exit 1; }
 : "${API:=26}"
 : "${BUILD_TOOLS:=$(ls -d "$SDK/build-tools"/* 2>/dev/null | sort -V | tail -1)}"
 : "${ANDROID_JAR:=$(ls -d "$SDK/platforms"/android-*/android.jar 2>/dev/null | sort -V | tail -1)}"

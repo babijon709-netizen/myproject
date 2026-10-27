@@ -1,12 +1,9 @@
-// oxhk/Oxhk.java — in-process overlay for Oxide (HyperHug). Loaded from the repacked APK,
-// same process as the game, no root. Native side: liboxhk.so (base + RVA reads).
+// oxhk/Oxhk.java — in-process ESP overlay for Oxide (HyperHug). Lives inside the repacked APK,
+// same process as the game, no root, no SYSTEM_ALERT_WINDOW: the overlay is a plain View added
+// to the game's own window, and touches are only captured on the menu itself.
 //
-// Two entry points, the patcher wires whichever the manifest allows:
-//   Oxhk.install(Application)  — from our generated Application subclass' onCreate
-//   Oxhk.install(Activity)     — from the launcher activity's onCreate
-//
-// Everything runs on the Android UI thread; Unity's script loop lives there too, which is why
-// the native side can call managed functions without any hooking.
+// Entry points (the repack script wires the second one via a generated Application subclass):
+//   Oxhk.install(Context) — call from Application.onCreate() or the launcher activity's onCreate
 
 package oxhk;
 
@@ -18,15 +15,11 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.Typeface;
-import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
-import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.ViewConfiguration;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.widget.FrameLayout;
 
 import org.json.JSONObject;
@@ -41,20 +34,21 @@ public final class Oxhk {
     private static final int MAX_ENT = 64;
     private static final int STRIDE = 10;
 
-    // ── config, shared with the native side ──────────────────────────────────────────────
-    static final int F_ESP = 1, F_BOXES = 1 << 1, F_CLEAN = 1 << 2;
-    static final int F_AIM = 1 << 3, F_TEAM = 1 << 4, F_MENU = 1 << 5;
+    // ── config ───────────────────────────────────────────────────────────────────────────
+    static final int F_ESP  = 1 << 0;
+    static final int F_BOX  = 1 << 1;
+    static final int F_NAME = 1 << 2;
+    static final int F_HP   = 1 << 3;
+    static final int F_DIST = 1 << 4;
+    static final int F_TEAM = 1 << 5;
+    static final int F_MENU = 1 << 6;
 
-    static int flags = F_ESP | F_BOXES | F_TEAM | F_MENU;
-    static float fovPx = 260f;
-    static float smoothing = 4f;
-    static float gain = 1f;
-    static int touchMs = 40;
-    static int headBone = 10;   // HumanBodyBones.Head
-    static int cooldownMs = 30;
+    static int flags = F_ESP | F_BOX | F_HP | F_DIST | F_TEAM | F_MENU;
+    static int headBone = 10;      // HumanBodyBones.Head
+    static float maxDist = 0f;     // 0 = everything
 
-    // libloader.so (the game's packer) walks modules and files at boot; stay out of the process
-    // until that's over. 0 = attach immediately, 2500-4000 = after the loader's startup scans.
+    // the packer (libloader.so) walks modules and files during boot; stay out of the process
+    // until that is over. 0 = attach right away, 2500-4000 = after the loader's startup scans.
     static final int ATTACH_DELAY_MS = 0;
 
     private static boolean sInstalled;
@@ -62,8 +56,7 @@ public final class Oxhk {
     private static EspView sView;
 
     static native void nativeInit(String filesDir, int w, int h);
-    static native void nativeSetConfig(int flags, float fovPx, float smoothing, float gain,
-                                       int touchMs, int headBone, int cooldownMs);
+    static native void nativeSetConfig(int flags, int headBone, float maxDist);
     static native int nativeTick(float[] out, int w, int h);
     static native int nativeNames(String[] out);
 
@@ -82,15 +75,18 @@ public final class Oxhk {
         if (ctx instanceof Activity) attach((Activity) ctx);
         Context app = ctx.getApplicationContext();
         if (app instanceof Application) {
-            ((Application) app).registerActivityLifecycleCallbacks(new Application.ActivityLifecycleCallbacks() {
-                public void onActivityCreated(Activity a, android.os.Bundle b) {}
-                public void onActivityStarted(Activity a) {}
-                public void onActivityResumed(Activity a) { attach(a); }
-                public void onActivityPaused(Activity a) {}
-                public void onActivityStopped(Activity a) {}
-                public void onActivitySaveInstanceState(Activity a, android.os.Bundle b) {}
-                public void onActivityDestroyed(Activity a) { if (a == sActivity) sActivity = null; }
-            });
+            ((Application) app).registerActivityLifecycleCallbacks(
+                    new Application.ActivityLifecycleCallbacks() {
+                        public void onActivityCreated(Activity a, android.os.Bundle b) {}
+                        public void onActivityStarted(Activity a) {}
+                        public void onActivityResumed(Activity a) { attach(a); }
+                        public void onActivityPaused(Activity a) {}
+                        public void onActivityStopped(Activity a) {}
+                        public void onActivitySaveInstanceState(Activity a, android.os.Bundle b) {}
+                        public void onActivityDestroyed(Activity a) {
+                            if (a == sActivity) sActivity = null;
+                        }
+                    });
         }
     }
 
@@ -106,7 +102,8 @@ public final class Oxhk {
                     try {
                         if (sView.getParent() == null) {
                             decor.addView(sView, new FrameLayout.LayoutParams(
-                                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.MATCH_PARENT));
                         }
                         sView.bringToFront();
                         pushConfig();
@@ -126,134 +123,90 @@ public final class Oxhk {
 
     static void pushConfig() {
         try {
-            nativeSetConfig(flags, fovPx, smoothing, gain, touchMs, headBone, cooldownMs);
+            nativeSetConfig(flags, headBone, maxDist);
         } catch (Throwable ignored) {
         }
     }
+
+    private static File cfgFile(Context ctx) { return new File(ctx.getFilesDir(), "oxhk.json"); }
 
     static void saveConfig(Context ctx) {
         try {
             JSONObject o = new JSONObject();
             o.put("flags", flags);
-            o.put("fovPx", fovPx);
-            o.put("smoothing", smoothing);
-            o.put("gain", gain);
-            o.put("touchMs", touchMs);
             o.put("headBone", headBone);
-            o.put("cooldownMs", cooldownMs);
-            File f = new File(ctx.getFilesDir(), "oxhk.json");
-            try (FileWriter w = new FileWriter(f)) { w.write(o.toString()); }
+            o.put("maxDist", maxDist);
+            try (FileWriter w = new FileWriter(cfgFile(ctx))) { w.write(o.toString()); }
         } catch (Throwable t) {
             Log.e(TAG, "save failed", t);
         }
     }
 
     static void loadConfig(Context ctx) {
-        File f = new File(ctx.getFilesDir(), "oxhk.json");
+        File f = cfgFile(ctx);
         if (!f.exists()) return;
-        try (FileReader r = new FileReader(f)) {
+        try {
             StringBuilder sb = new StringBuilder();
-            char[] buf = new char[512];
-            int n;
-            while ((n = r.read(buf)) > 0) sb.append(buf, 0, n);
+            try (FileReader r = new FileReader(f)) {
+                char[] buf = new char[512];
+                int n;
+                while ((n = r.read(buf)) > 0) sb.append(buf, 0, n);
+            }
             JSONObject o = new JSONObject(sb.toString());
             flags = o.optInt("flags", flags);
-            fovPx = (float) o.optDouble("fovPx", fovPx);
-            smoothing = (float) o.optDouble("smoothing", smoothing);
-            gain = (float) o.optDouble("gain", gain);
-            touchMs = o.optInt("touchMs", touchMs);
             headBone = o.optInt("headBone", headBone);
-            cooldownMs = o.optInt("cooldownMs", cooldownMs);
+            maxDist = (float) o.optDouble("maxDist", maxDist);
         } catch (Throwable t) {
             Log.e(TAG, "load failed", t);
         }
     }
 
-    // ── touch synthesis: swipe on the game's own view, nothing written to game memory ─────
-    static View gameView() {
-        Activity a = sActivity;
-        if (a == null) return null;
-        Window wnd = a.getWindow();
-        if (wnd == null) return null;
-        View decor = wnd.getDecorView();
-        if (!(decor instanceof ViewGroup)) return null;
-        ViewGroup g = (ViewGroup) decor;
-        for (int i = 0; i < g.getChildCount(); i++) {
-            View c = g.getChildAt(i);
-            if (c != sView) return c;
-        }
-        return null;
-    }
-
-    static void swipe(float dx, float dy) {
-        View target = gameView();
-        if (target == null) return;
-        int w = target.getWidth(), h = target.getHeight();
-        if (w <= 0 || h <= 0) return;
-        float cx = w * 0.5f, cy = h * 0.5f;
-
-        long down = SystemClock.uptimeMillis();
-        long span = Math.max(1, touchMs);
-
-        MotionEvent d = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, cx, cy, 0);
-        d.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        target.dispatchTouchEvent(d);
-        d.recycle();
-
-        MotionEvent m = MotionEvent.obtain(down, down + span / 2, MotionEvent.ACTION_MOVE, cx + dx, cy + dy, 0);
-        m.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        target.dispatchTouchEvent(m);
-        m.recycle();
-
-        MotionEvent u = MotionEvent.obtain(down, down + span, MotionEvent.ACTION_UP, cx + dx, cy + dy, 0);
-        u.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        target.dispatchTouchEvent(u);
-        u.recycle();
-    }
-
-    // ── overlay view ─────────────────────────────────────────────────────────────────────
+    // ── overlay ──────────────────────────────────────────────────────────────────────────
     static final class EspView extends View implements Runnable {
-        private final float[] out = new float[4 + MAX_ENT * STRIDE];
+        private final float[] out = new float[1 + MAX_ENT * STRIDE];
         private final String[] names = new String[MAX_ENT];
+
         private final Paint box = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint panel = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint panelText = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF menuRect = new RectF();
-        private final RectF closeRect = new RectF();
-        private final RectF badgeRect = new RectF();
-        private final RectF[] rowRects = new RectF[16];
+
+        private final RectF menu = new RectF();
+        private final RectF badge = new RectF();
+        private final RectF[] rows = new RectF[12];
+
+        private final float d;
+        private final float rowH;
+        private final float menuW = 172f;
 
         private int count;
         private long lastNames;
-        private int tab;                 // 0 esp, 1 aim, 2 cfg
         private boolean dragging;
-        private float dragOffX, dragOffY;
+        private float dragX, dragY;
         private float menuX = -1, menuY = -1;
-        private final float density;
-        private final float rowH;
-        private final float menuW;
 
         EspView(Context ctx) {
             super(ctx);
             setWillNotDraw(false);
-            density = ctx.getResources().getDisplayMetrics().density;
-            rowH = 26f * density;
-            menuW = 168f * density;
+            d = ctx.getResources().getDisplayMetrics().density;
+            rowH = 27f * d;
 
             box.setStyle(Paint.Style.STROKE);
-            box.setStrokeWidth(1.6f * density);
+            box.setStrokeWidth(1.6f * d);
+
             text.setColor(Color.WHITE);
-            text.setTextSize(11f * density);
+            text.setTextSize(11f * d);
             text.setTypeface(Typeface.MONOSPACE);
             text.setShadowLayer(2f, 0f, 1f, Color.BLACK);
-            panel.setColor(0xCC101010);
-            panelText.setColor(0xFFE8E8E8);
-            panelText.setTextSize(11.5f * density);
+
+            panel.setColor(0xCC0E0E10);
+            panelText.setColor(0xFFE6E6E6);
+            panelText.setTextSize(12f * d);
             panelText.setTypeface(Typeface.MONOSPACE);
+
             fill.setStyle(Paint.Style.FILL);
-            for (int i = 0; i < rowRects.length; i++) rowRects[i] = new RectF();
+            for (int i = 0; i < rows.length; i++) rows[i] = new RectF();
         }
 
         @Override protected void onAttachedToWindow() {
@@ -268,7 +221,16 @@ public final class Oxhk {
 
         @Override public void run() {
             try {
-                tick();
+                int w = getWidth(), h = getHeight();
+                if (w > 0 && h > 0) count = nativeTick(out, w, h);
+                long now = SystemClock.uptimeMillis();
+                if (now - lastNames > 300) {
+                    lastNames = now;
+                    if ((flags & F_ESP) != 0 && (flags & F_NAME) != 0) {
+                        int n = nativeNames(names);
+                        for (int i = n; i < names.length; i++) names[i] = null;
+                    }
+                }
             } catch (Throwable t) {
                 Log.e(TAG, "tick failed", t);
             }
@@ -276,210 +238,163 @@ public final class Oxhk {
             postOnAnimation(this);
         }
 
-        private void tick() {
-            int w = getWidth(), h = getHeight();
-            if (w <= 0 || h <= 0) return;
-            count = nativeTick(out, w, h);
-
-            if (out[0] > 0.5f && (flags & F_AIM) != 0 && Math.abs(out[1]) + Math.abs(out[2]) > 0.5f) {
-                swipe(out[1], out[2]);
-            }
-            long now = SystemClock.uptimeMillis();
-            if (now - lastNames > 250) {
-                lastNames = now;
-                int n = nativeNames(names);
-                if (n < names.length) {
-                    for (int i = n; i < names.length; i++) names[i] = null;
-                }
-            }
-        }
-
-        // ── input: only the menu area consumes touches, everything else passes to the game ──
+        // ── input: the menu consumes touches, everything else goes to the game ───────────
         @Override public boolean onTouchEvent(MotionEvent e) {
-            layoutMenu();
-            float x = e.getX(), y = e.getY();
-            int action = e.getActionMasked();
+            layout();
+            final float x = e.getX(), y = e.getY();
+            final int action = e.getActionMasked();
 
             if (action == MotionEvent.ACTION_DOWN) {
                 if ((flags & F_MENU) == 0) {
-                    if (badgeRect.contains(x, y)) { flags |= F_MENU; pushConfig(); invalidate(); return true; }
-                    return false;
-                }
-                if (closeRect.contains(x, y)) { flags &= ~F_MENU; pushConfig(); invalidate(); return true; }
-                if (menuRect.contains(x, y)) {
-                    if (y - menuRect.top < rowH) {           // title bar: drag
-                        dragging = true;
-                        dragOffX = x - menuRect.left;
-                        dragOffY = y - menuRect.top;
+                    if (badge.contains(x, y)) {
+                        flags |= F_MENU;
+                        pushConfig();
+                        invalidate();
                         return true;
                     }
-                    for (int i = 0; i < rowRects.length; i++) {
-                        if (rowRects[i].contains(x, y)) {
-                            onRow(i);
-                            return true;
-                        }
-                    }
+                    return false;
+                }
+                if (!menu.contains(x, y)) {
+                    if (badge.contains(x, y)) { flags &= ~F_MENU; pushConfig(); invalidate(); return true; }
+                    return false;
+                }
+                if (y - menu.top < rowH) {          // title bar drags the menu
+                    dragging = true;
+                    dragX = x - menu.left;
+                    dragY = y - menu.top;
                     return true;
                 }
-                return false;
+                for (int i = 0; i < rows.length; i++) {
+                    if (rows[i].contains(x, y)) { onRow(i); return true; }
+                }
+                return true;
             }
             if (action == MotionEvent.ACTION_MOVE && dragging) {
-                menuX = Math.max(0, Math.min(getWidth() - menuW, x - dragOffX));
-                menuY = Math.max(0, Math.min(getHeight() - rowH * 2, y - dragOffY));
-                layoutMenu();
+                menuX = Math.max(0, Math.min(getWidth() - menuW * d, x - dragX));
+                menuY = Math.max(0, Math.min(getHeight() - rowH * 2, y - dragY));
+                layout();
                 invalidate();
                 return true;
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 if (dragging) { dragging = false; return true; }
-                return menuRect.contains(x, y);
+                return menu.contains(x, y);
             }
-            return menuRect.contains(x, y);
+            return menu.contains(x, y);
         }
 
-        private boolean onRow(int i) {
-            if (i == 3) { tab = 0; return true; }
-            if (i == 4) { tab = 1; return true; }
-            if (i == 5) { tab = 2; return true; }
-            if (i < 3) { tab = i; return true; }
-
-            int slot = i - 6;
-            if (tab == 0) {
-                if (slot == 0) flags ^= F_ESP;
-                else if (slot == 1) flags ^= F_BOXES;
-                else if (slot == 2) flags ^= F_CLEAN;
-                else if (slot == 3) flags ^= F_TEAM;
-            } else if (tab == 1) {
-                if (slot == 0) flags ^= F_AIM;
-                else if (slot == 1) fovPx = clamp(fovPx + 40f, 40f, 1400f);
-                else if (slot == 2) smoothing = clamp(smoothing + 1f, 1f, 20f);
-                else if (slot == 3) gain = clamp(gain + 0.1f, 0.2f, 3f);
-                else if (slot == 4) touchMs = (int) clamp(touchMs + 20, 10, 300);
-                else if (slot == 5) cooldownMs = (int) clamp(cooldownMs + 10, 0, 300);
-            } else {
-                if (slot == 0) { saveConfig(getContext()); return true; }
-                if (slot == 1) { loadConfig(getContext()); }
-                if (slot == 2) {
-                    flags = F_ESP | F_BOXES | F_TEAM | F_MENU;
-                    fovPx = 260f; smoothing = 4f; gain = 1f; touchMs = 40; cooldownMs = 30;
-                }
-                if (slot == 3) { flags &= ~F_MENU; }  // badge in the top-left corner re-opens it
+        private void onRow(int i) {
+            switch (i) {
+                case 0: flags ^= F_ESP; break;
+                case 1: flags ^= F_BOX; break;
+                case 2: flags ^= F_NAME; break;
+                case 3: flags ^= F_HP; break;
+                case 4: flags ^= F_DIST; break;
+                case 5: flags ^= F_TEAM; break;
+                case 6: maxDist = maxDist <= 0f ? 100f : (maxDist >= 300f ? 0f : maxDist * 2f); break;
+                case 7: saveConfig(getContext()); break;
+                case 8: loadConfig(getContext()); break;
+                case 9: flags &= ~F_MENU; break;
+                default: return;
             }
             pushConfig();
-            return true;
+            invalidate();
         }
 
-        private static float clamp(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
-
-        private void layoutMenu() {
-            float x = menuX < 0 ? 12f * density : menuX;
-            float y = menuY < 0 ? 90f * density : menuY;
-            float h = rowH * 11;
-            menuRect.set(x, y, x + menuW, y + h);
-            closeRect.set(menuRect.right - rowH, menuRect.top, menuRect.right, menuRect.top + rowH);
-            for (int i = 0; i < rowRects.length; i++) rowRects[i].setEmpty();
+        private void layout() {
+            final float x = menuX < 0 ? 14f * d : menuX;
+            final float y = menuY < 0 ? 96f * d : menuY;
+            menu.set(x, y, x + menuW * d, y + rowH * 11.5f);
+            badge.set(10f * d, 88f * d, 10f * d + 36f * d, 88f * d + 22f * d);
+            for (int i = 0; i < rows.length; i++) {
+                rows[i].set(menu.left, menu.top + rowH * (1.4f + i), menu.right,
+                            menu.top + rowH * (2.4f + i));
+            }
         }
 
         @Override protected void onDraw(Canvas c) {
-            int n = Math.min(count, MAX_ENT);
-            int w = getWidth(), h = getHeight();
+            final int n = Math.min(count, MAX_ENT);
+            final int w = getWidth(), h = getHeight();
             if (w <= 0 || h <= 0) return;
 
-            drawFov(c, w, h);
             if ((flags & F_ESP) != 0) {
                 for (int i = 0; i < n; i++) {
-                    int b = 4 + i * STRIDE;
-                    boolean team = out[b + 9] > 0.5f;
-                    box.setColor(team ? 0xFF4FA3FF : 0xFFFF4444);
-                    float x1 = out[b], y1 = out[b + 1], x2 = out[b + 2], y2 = out[b + 3];
-                    float hx = out[b + 4], hy = out[b + 5];
-                    float dist = out[b + 6], hp = out[b + 7], hpMax = out[b + 8];
-                    if ((flags & F_CLEAN) == 0) {
+                    final int b = 1 + i * STRIDE;
+                    final boolean team = out[b + 9] > 0.5f;
+                    final int col = team ? 0xFF4FA3FF : 0xFFFF4D4D;
+
+                    final float x1 = out[b], y1 = out[b + 1], x2 = out[b + 2], y2 = out[b + 3];
+                    final float hx = out[b + 4], hy = out[b + 5];
+                    final float dist = out[b + 6], hp = out[b + 7], hpMax = out[b + 8];
+
+                    if ((flags & F_BOX) != 0) {
+                        box.setColor(col);
                         c.drawRect(x1, y1, x2, y2, box);
-                        float frac = hpMax > 0f ? Math.max(0f, Math.min(1f, hp / hpMax)) : 0f;
-                        fill.setColor(0xAA22C55E);
-                        c.drawRect(x1 - 4f * density, y2, x1 - 1f * density, y2 - (y2 - y1) * frac, fill);
                     }
-                    fill.setColor(team ? 0xFF4FA3FF : 0xFFFF4444);
-                    c.drawCircle(hx, hy, 3f * density, fill);
-                    String label = String.format(Locale.US, "%.0fm", dist);
-                    if ((flags & F_CLEAN) == 0 && hpMax > 0f) {
-                        label = String.format(Locale.US, "%.0fm %.0fhp", dist, hp);
+
+                    fill.setColor(col);
+                    c.drawCircle(hx, hy, 3f * d, fill);
+
+                    if ((flags & F_HP) != 0 && hpMax > 0f) {
+                        float frac = Math.max(0f, Math.min(1f, hp / hpMax));
+                        fill.setColor(0xAA33D17A);
+                        c.drawRect(x1 - 5f * d, y2, x1 - 2f * d, y2 - (y2 - y1) * frac, fill);
                     }
-                    c.drawText(label, x1, y2 + 12f * density, text);
-                    String nm = i < names.length ? names[i] : null;
-                    if (nm != null && (flags & F_CLEAN) == 0) c.drawText(nm, x1, y1 - 4f * density, text);
+
+                    if ((flags & F_NAME) != 0 && i < names.length && names[i] != null) {
+                        c.drawText(names[i], x1, y1 - 4f * d, text);
+                    }
+                    if ((flags & F_DIST) != 0) {
+                        c.drawText(String.format(Locale.US, "%.0fm", dist), x1, y2 + 12f * d, text);
+                    }
                 }
             }
-            if ((flags & F_MENU) != 0) {
-                drawMenu(c, n);
-            } else {
-                badgeRect.set(8f * density, 70f * density, 8f * density + 34f * density, 70f * density + 22f * density);
-                fill.setColor(0x66000000);
-                c.drawRoundRect(badgeRect, 5f * density, 5f * density, fill);
-                panelText.setColor(0xFFB8B8B8);
-                c.drawText("oxhk", badgeRect.left + 5f * density, badgeRect.bottom - 7f * density, panelText);
-            }
+
+            if ((flags & F_MENU) != 0) drawMenu(c);
+            else drawBadge(c);
         }
 
-        private void drawFov(Canvas c, int w, int h) {
-            if ((flags & F_AIM) == 0) return;
-            Paint p = box;
-            p.setColor(0x66FFCC33);
-            c.drawCircle(w * 0.5f, h * 0.5f, fovPx, p);
+        private void drawBadge(Canvas c) {
+            fill.setColor(0x66000000);
+            c.drawRoundRect(badge, 5f * d, 5f * d, fill);
+            panelText.setColor(0xFFB9B9B9);
+            c.drawText("oxhk", badge.left + 5f * d, badge.bottom - 7f * d, panelText);
         }
 
-        private void drawMenu(Canvas c, int n) {
-            layoutMenu();
-            c.drawRoundRect(menuRect, 6f * density, 6f * density, panel);
+        private void drawMenu(Canvas c) {
+            c.drawRoundRect(menu, 7f * d, 7f * d, panel);
 
-            String[] tabs = {"ESP", "AIM", "CFG"};
-            String[] rows;
-            if (tab == 0) {
-                rows = new String[]{
-                        "esp: " + onOff((flags & F_ESP) != 0),
-                        "boxes: " + onOff((flags & F_BOXES) != 0),
-                        "clean: " + onOff((flags & F_CLEAN) != 0),
-                        "teamcheck: " + onOff((flags & F_TEAM) != 0),
-                        "", ""};
-            } else if (tab == 1) {
-                rows = new String[]{
-                        "aim: " + onOff((flags & F_AIM) != 0),
-                        "fov: " + (int) fovPx,
-                        "smooth: " + (int) smoothing,
-                        "gain: " + String.format(Locale.US, "%.1f", gain),
-                        "touchms: " + touchMs,
-                        String.format(Locale.US, "cooldown: %d  (aiming %d)", cooldownMs, n)};
-            } else {
-                rows = new String[]{"save cfg", "load cfg", "reset", "close menu", "", ""};
-            }
-
-            float y = menuRect.top + rowH;
             panelText.setColor(0xFFFFD75E);
-            c.drawText("oxhk 11978", menuRect.left + 8f * density, y - rowH * 0.3f, panelText);
-            panelText.setColor(0xFFB0B0B0);
-            c.drawText("x", closeRect.centerX() - 4f * density, y - rowH * 0.3f, panelText);
+            c.drawText("oxhk esp", menu.left + 10f * d, menu.top + rowH * 0.85f, panelText);
+            panelText.setColor(0xFF8C8C8C);
+            c.drawText("v11978  " + enemiesLabel(), menu.right - 92f * d, menu.top + rowH * 0.85f, panelText);
 
-            // tab strip
-            float tx = menuRect.left + 8f * density;
-            for (int i = 0; i < tabs.length; i++) {
-                panelText.setColor(i == tab ? 0xFFFFD75E : 0xFF8A8A8A);
-                c.drawText(tabs[i], tx, menuRect.top + rowH * 1.7f, panelText);
-                rowRects[3 + i].set(tx - 4f * density, menuRect.top + rowH * 1.1f,
-                        tx + 34f * density, menuRect.top + rowH * 1.95f);
-                tx += 44f * density;
-            }
-
-            float ry = menuRect.top + rowH * 2.2f;
-            for (int i = 0; i < rows.length; i++) {
-                if (rows[i].isEmpty()) continue;
-                panelText.setColor(0xFFE8E8E8);
-                c.drawText(rows[i], menuRect.left + 8f * density, ry + rowH * 0.65f, panelText);
-                rowRects[6 + i].set(menuRect.left, ry, menuRect.right, ry + rowH);
-                ry += rowH;
-            }
+            panelText.setColor(0xFFE6E6E6);
+            final int base = (int) (menu.top + rowH * 2.1f);
+            c.drawText(row("esp", (flags & F_ESP) != 0), menu.left + 10f * d, base, panelText);
+            c.drawText(row("boxes", (flags & F_BOX) != 0), menu.left + 10f * d, base + rowH, panelText);
+            c.drawText(row("names", (flags & F_NAME) != 0), menu.left + 10f * d, base + rowH * 2, panelText);
+            c.drawText(row("health", (flags & F_HP) != 0), menu.left + 10f * d, base + rowH * 3, panelText);
+            c.drawText(row("distance", (flags & F_DIST) != 0), menu.left + 10f * d, base + rowH * 4, panelText);
+            c.drawText(row("team check", (flags & F_TEAM) != 0), menu.left + 10f * d, base + rowH * 5, panelText);
+            c.drawText("range: " + (maxDist <= 0f ? "all" : String.format(Locale.US, "%.0fm", maxDist)),
+                    menu.left + 10f * d, base + rowH * 6, panelText);
+            panelText.setColor(0xFF9E9E9E);
+            c.drawText("save", menu.left + 10f * d, base + rowH * 7, panelText);
+            c.drawText("reload", menu.left + 10f * d, base + rowH * 8, panelText);
+            c.drawText("close", menu.left + 10f * d, base + rowH * 9, panelText);
         }
 
-        private static String onOff(boolean b) { return b ? "on" : "off"; }
+        private String enemiesLabel() {
+            int enemy = 0;
+            for (int i = 0; i < Math.min(count, MAX_ENT); i++) {
+                if (out[1 + i * STRIDE + 9] <= 0.5f) enemy++;
+            }
+            return enemy + "e";
+        }
+
+        private static String row(String label, boolean on) {
+            return label + ": " + (on ? "on" : "off");
+        }
     }
 }
