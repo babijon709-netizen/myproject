@@ -94,6 +94,48 @@ jobs:
             oxide_int/build/dex/classes.dex
           if-no-files-found: error
 
+  injector:
+    name: injector apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: toolchain
+        run: |
+          set -e
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          NDK="$(ls -d "$SDK"/ndk/* | sort -V | tail -1)"
+          echo "SDK=$SDK"              >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "apksig: $(ls "$SDK"/build-tools/*/lib/apksigner.jar | tail -1)"
+
+      - name: build injector
+        run: |
+          set -o pipefail
+          bash -x ./oxide_int/tools/build_injector.sh 2>&1 | tee "$RUNNER_TEMP/injector.log"
+
+      - name: report failure
+        if: failure()
+        run: |
+          set -e
+          cp "$RUNNER_TEMP/injector.log" ci-last-failure.log || echo "no log" > ci-last-failure.log
+          git config user.name  "ci"
+          git config user.email "ci@users.noreply.github.com"
+          git add -f ci-last-failure.log
+          git commit -m "ci: injector build log for ${GITHUB_SHA:0:7} [skip ci]" || true
+          git push || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxhk-injector-apk
+          path: oxide_int/build/injector/*.apk
+          if-no-files-found: error
+
   repack:
     name: repack game apk
     needs: payload

@@ -2,8 +2,10 @@
 // same process as the game, no root, no SYSTEM_ALERT_WINDOW: the overlay is a plain View added
 // to the game's own window, and touches are only captured on the menu itself.
 //
-// Entry points (the repack script wires the second one via a generated Application subclass):
-//   Oxhk.install(Context) — call from Application.onCreate() or the launcher activity's onCreate
+// Entry points (both wire-ups exist):
+//   oxhk.App.onCreate()   — used by the injector APK (manifest's application class is rewritten)
+//   Oxhk.install(Context) — used by tools/build.sh (generated smali subclass)
+// Either way it is called from the app's own Application, before Unity starts.
 
 package oxhk;
 
