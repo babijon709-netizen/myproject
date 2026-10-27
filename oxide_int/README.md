@@ -44,6 +44,46 @@ the Android UI thread; Unity runs its script loop on that same thread, so all ma
 land where the game expects them. Touches for aim are injected as `MotionEvent`s into the
 game's own view — nothing is written into game memory.
 
+
+## the APK this targets
+
+`com.catsbit.oxidesurvivalisland`, versionName 1.16.11978, versionCode 11978, minSdk 25,
+target 36, `extractNativeLibs=true`, split install (`base.apk` + `split_config.arm64_v8a.apk`).
+
+* base.apk: 7 dex (`classes.dex` .. `classes7.dex`), **no** `lib/` at all, 1304 entries
+* split: 29 arm64 libs, `libil2cpp.so` is **byte-identical to the dump**
+  (md5 `e3c232f144a398d2c60c643aa2663b65`, 245 567 024 B) — every RVA in `oxhk.cpp` applies
+* `assets/bin/Data/Managed/Metadata/global-metadata.dat` is a 4 KiB stub, the real thing is
+  decrypted at runtime by the loader; `assets/bin/Data/c1a4ee663e7b7702978e12f1c5b5f948`
+  (9.4 MB) is the encrypted blob
+
+protection chain (what a repack runs into):
+
+| piece | what it is |
+|---|---|
+| `libloader.so` (15 MB) | packed loader, only `JNI_OnLoad` exported, sections `.gcc_r` `.dyncl` `.ctx` `.eh_trace` `.adi`, .text entropy 7.16 → encrypted/VM-ed |
+| `libpglarmor.so` (68 KB) | one JNI export `Java_dtGga4_..._bc`, second half of the same armor |
+| app class `dtGga4.sNBtq9.vRXcl4.pm7o47` | `<clinit>` → `qCXAY9.uIbdQ6.jp8Aw0.ejRrR3.hsOtW6()` → `System.loadLibrary("loader")` |
+| launcher `dtGga4.sNBtq9.vRXcl4.jPsie4` | extends `com.google.firebase.MessagingUnityPlayerActivity`, overrides `updateUnityCommandLineArguments` with obfuscated string compares |
+| `libapminsighta/b.so` | crash/anti-debug sidecar (ptrace, `/proc/*/maps` dumps) |
+| `qCXAY9.*` (classes7.dex) | ad-attribution SDK: enumerates installed apps, installer package, dumps PackageInfo to JSON — not the tamper check |
+
+Nothing in Java verifies the signature. If anything enforces it, it is inside `libloader` /
+`libpglarmor`, i.e. native and packed. That is exactly what `--probe` answers.
+
+## stage 0 — probe before anything else
+
+```bash
+./tools/build.sh --probe base.apk split_config.arm64_v8a.apk
+adb uninstall com.catsbit.oxidesurvivalisland
+adb install-multiple -r build/base-oxhk.apk build/split_config.arm64_v8a-oxhk.apk
+```
+
+same APK, same libs, only re-signed. Boots to the lobby → the armor does not police the
+signature locally, go straight to the full build. Dies silently / black screen / closes on
+splash → the check is in `libloader`, and that is a separate reverse job (`JNI_OnLoad`,
+`.gcc_r`/`.dyncl` tables) before any of this is usable.
+
 ## build
 
 ```bash
@@ -63,7 +103,8 @@ The script:
    `android:name` at it, so `System.loadLibrary("oxhk")` happens before Unity starts
 5. stores `liboxhk.so` uncompressed (`zip -0`) so `extractNativeLibs=false` still works
 6. zipalign + apksigner (keystore auto-generated at `build/oxhk.jks`, pass `oxhkpass`)
-7. re-signs the splits with the same key
+7. puts `liboxhk.so` into the **split's** `lib/arm64-v8a` (stored, `zip -0`) and re-signs the
+   split with the same key — that's where every other lib of this game already lives
 
 ## install
 
