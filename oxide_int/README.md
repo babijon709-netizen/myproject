@@ -441,3 +441,25 @@ and split paths, and fall back to the manual `addAssetPath` path only if that on
 summed, which hid a failed base path), both key forms are probed (`assets/bin/Data/...` and
 `bin/Data/...`, since Play Asset Delivery packs may root assets differently), and the chosen
 manager's `list()` for `bin`, `bin/Data`, `assets/bin`, `assets/bin/Data` is printed.
+
+### sandbox: booted (2026-10-28)
+
+The container now gets the real game running: splash → its own UI → `WEAK INTERNET CONNECTION`
+dialog with `v1.16.11978` in the corner. That means resources loaded, il2cpp initialised and the
+game's own managed code alive inside our process.
+
+The last blocker before that was `getPackageCodePath()`: Unity reads `assets/bin/Data/*` out of the
+apk *file* (its own unzip, not `AssetManager`), asking the context for the code path — and our host
+was answering with `oxhk.sandbox/base.apk`. Both `getPackageCodePath()` and
+`getPackageResourcePath()` now return the game's `sourceDir`.
+
+"Weak internet connection" was the next one: the game's sockets run as *our* uid, and our manifest
+declared no network permissions, so every `connect()` was refused. The sandbox manifest now carries
+`INTERNET`, `ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `VIBRATE`, `WAKE_LOCK`,
+`POST_NOTIFICATIONS`, `FOREGROUND_SERVICE`, `REQUEST_INSTALL_PACKAGES` (the game's startup reflects
+on `canRequestPackageInstalls`) and `MANAGE_EXTERNAL_STORAGE`. `UnityActivity` logs the active
+network and its capabilities at boot.
+
+The sandbox apk also ships the ESP now: `liboxhk.so` + `oxhk.Oxhk` are compiled into it, and
+`UnityActivity` calls `oxhk.Oxhk.install(this)` right after the engine view is created — the
+overlay is a plain `addView` into a window we own, with no hooks anywhere.
