@@ -1,10 +1,19 @@
 // UnityActivity.java — stage 2: the game's engine, booted from our own activity.
 //
 // This is why the container does not need the Activity.attach() surgery other cloners do: the
-// activity that hosts Unity is *ours*, so it can simply answer with the game's identity —
-// package name, assets (base + all splits merged), resources, classloader, ApplicationInfo —
-// and `new UnityPlayer(this)` then finds everything where it expects it, through its own
-// virtual calls. The game's apk is never modified and keeps its store signature.
+// activity that hosts Unity is *ours*, so it can answer with the game's identity — package name,
+// assets (base + all splits merged), resources, classloader, ApplicationInfo — and the engine
+// finds everything where it expects it, through its own virtual calls. The game's apk is never
+// modified and keeps its store signature.
+//
+// This build is Unity 6 (2023.x) layout, read out of the game's own dex:
+//   UnityPlayerActivity.onCreate:
+//       mUnityPlayer = new UnityPlayerForActivityOrService(this, this);
+//       setContentView(mUnityPlayer.getFrameLayout());
+//   UnityPlayer's only constructor is (Context, a.o /*enum: context type*/, IUnityPlayerLifecycleEvents)
+// so we construct the same subclass, pass a Proxy for IUnityPlayerLifecycleEvents (a 2-method
+// interface) and forward the lifecycle by name — onResume/onPause/destroy here, resume/pause/quit
+// on older Unity, both are tried.
 
 package oxhk.sandbox;
 
@@ -19,21 +28,28 @@ import android.os.Bundle;
 import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.FrameLayout;
 
 import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 
 public final class UnityActivity extends Activity {
     private static final String TAG = "oxhk.sandbox";
 
     private Sandbox s;
-    private Object player;          // com.unity3d.player.UnityPlayer (a ViewGroup)
-    private FrameLayout root;       // player + our overlay on top
+    private Object player;          // UnityPlayer / UnityPlayerForActivityOrService
+    private Object lifecycle;       // IUnityPlayerLifecycleEvents proxy
+    private FrameLayout root;       // engine view + our overlay on top
+    private final StringBuilder trace = new StringBuilder();
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
-        Sandbox.setLog(null);
+        Sandbox.setLog(new Sandbox.Sink() {
+            @Override public void line(String l) { trace.append(l).append('\n'); }
+        });
         s = Sandbox.get(this);
 
         root = new FrameLayout(this);
@@ -46,98 +62,150 @@ public final class UnityActivity extends Activity {
         } catch (Throwable t) {
             Log.e(TAG, "boot failed", t);
             android.widget.TextView tv = new android.widget.TextView(this);
-            tv.setText("boot failed:\n\n" + t + "\n\nsee logcat (tag oxhk.sandbox)");
+            tv.setText("boot failed:\n\n" + t + "\n\n— trace —\n" + trace
+                    + "\nsee logcat (tag oxhk.sandbox)");
             tv.setTextColor(0xFFFF6666);
+            tv.setTextSize(10);
+            tv.setPadding(24, 24, 24, 24);
             root.addView(tv);
         }
     }
 
+    // ── boot ──────────────────────────────────────────────────────────────────────────────
+
     private void boot() throws Exception {
         ClassLoader cl = s.loader();
-        Class<?> up = Class.forName("com.unity3d.player.UnityPlayer", true, cl);
-        Constructor<?>[] ctors = up.getConstructors();
-        player = null;
-        Throwable last = null;
-        for (Constructor<?> c : ctors) {
+
+        // IUnityPlayerLifecycleEvents: two methods, so a Proxy is enough
+        try {
+            Class<?> iface = Class.forName("com.unity3d.player.IUnityPlayerLifecycleEvents", true, cl);
+            lifecycle = Proxy.newProxyInstance(cl, new Class<?>[]{iface}, new InvocationHandler() {
+                @Override public Object invoke(Object p, Method m, Object[] a) {
+                    Log.i(TAG, "lifecycle: " + m.getName());
+                    return null;
+                }
+            });
+            log("lifecycle proxy: " + iface.getName());
+        } catch (Throwable t) {
+            log("lifecycle proxy skipped: " + t);
+            lifecycle = this;   // UnityPlayerActivity itself implements the interface
+        }
+
+        Class<?> cls = Class.forName("com.unity3d.player.UnityPlayerForActivityOrService",
+                true, cl);
+        Class<?> iface = null;
+        try {
+            iface = Class.forName("com.unity3d.player.IUnityPlayerLifecycleEvents", true, cl);
+        } catch (Throwable ignored) {
+        }
+
+        // (Context, IUnityPlayerLifecycleEvents) is what UnityPlayerActivity uses
+        for (Constructor<?> c : cls.getConstructors()) {
             Class<?>[] p = c.getParameterTypes();
-            if (p.length != 1) continue;
-            Object arg = null;
-            if (p[0].isInstance(this)) arg = this;
-            else if (p[0].isInstance(s.ctx)) arg = s.ctx;
-            if (arg == null) continue;
+            if (p.length != 2) continue;
+            if (!p[0].isInstance(this) || (iface != null && p[1] != iface)) continue;
+            c.setAccessible(true);
+            player = c.newInstance(this, lifecycle);
+            log("engine: " + cls.getSimpleName() + "(" + p[0].getSimpleName() + ", "
+                    + p[1].getSimpleName() + ")");
+            break;
+        }
+        if (player == null) throw new IllegalStateException("no usable constructor in "
+                + cls.getName() + " " + java.util.Arrays.toString(cls.getConstructors()));
+
+        View view = viewOf(player);
+        root.addView(view, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+        root.setKeepScreenOn(true);
+        log("engine view: " + view.getClass().getName() + " — waiting for il2cpp");
+    }
+
+    private View viewOf(Object p) throws Exception {
+        for (String name : new String[]{"getFrameLayout", "getView"}) {
             try {
-                c.setAccessible(true);
-                player = c.newInstance(arg);
-                Log.i(TAG, "UnityPlayer(" + p[0].getSimpleName() + ") ok");
-                break;
-            } catch (Throwable t) {
-                last = t;
-                Log.e(TAG, "UnityPlayer(" + p[0].getSimpleName() + ") failed", t);
+                Method m = p.getClass().getMethod(name);
+                Object v = m.invoke(p);
+                if (v instanceof View) return (View) v;
+            } catch (NoSuchMethodException ignored) {
             }
         }
-        if (player == null) throw last != null ? new IllegalStateException(last) :
-                new IllegalStateException("no usable UnityPlayer constructor in "
-                        + java.util.Arrays.toString(ctors));
-
-        if (player instanceof View) {
-            root.addView((View) player, new FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        } else {
-            Method getView = player.getClass().getMethod("getView");
-            root.addView((View) getView.invoke(player), new FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        }
-        log("unity booted: " + player.getClass().getName());
-
-        // unity wants its window visible; drop the system bars like its own activity does
-        root.setKeepScreenOn(true);
+        if (p instanceof View) return (View) p;
+        throw new IllegalStateException("no view out of " + p.getClass().getName());
     }
 
-    private void log(String s) {
+    private void log(String s) throws Exception {
         Log.i(TAG, s);
+        Sandbox.say(s);
     }
 
-    private void call(String name, Class<?>[] types, Object... args) {
+    /** call by name, trying the Unity 6 names first and the older ones after. */
+    private void call(String... names) {
         if (player == null) return;
-        try {
-            Method m = player.getClass().getMethod(name, types);
-            m.invoke(player, args);
-        } catch (Throwable t) {
-            Log.w(TAG, "UnityPlayer." + name + " failed: " + t);
+        for (String name : names) {
+            try {
+                Method m = player.getClass().getMethod(name);
+                m.invoke(player);
+                return;
+            } catch (NoSuchMethodException ignored) {
+            } catch (Throwable t) {
+                Log.w(TAG, "UnityPlayer." + name + " failed: " + t);
+                return;
+            }
         }
     }
 
-    // lifecycle, mirroring UnityPlayerActivity
+    // ── lifecycle, mirroring UnityPlayerActivity ─────────────────────────────────────────
+
+    @Override protected void onStart() {
+        super.onStart();
+        call("onStart", "start");
+    }
+
     @Override protected void onResume() {
         super.onResume();
-        call("resume", new Class[0]);
+        call("onResume", "resume");
     }
 
     @Override protected void onPause() {
-        call("pause", new Class[0]);
+        call("onPause", "pause");
         super.onPause();
     }
 
+    @Override protected void onStop() {
+        call("onStop", "stop");
+        super.onStop();
+    }
+
     @Override protected void onDestroy() {
-        call("quit", new Class[0]);
+        call("destroy", "quit");
         super.onDestroy();
     }
 
     @Override public void onWindowFocusChanged(boolean has) {
         super.onWindowFocusChanged(has);
-        call("windowFocusChanged", new Class[]{boolean.class}, has);
+        if (player == null) return;
+        try {
+            player.getClass().getMethod("windowFocusChanged", boolean.class)
+                    .invoke(player, has);
+        } catch (Throwable ignored) {
+        }
     }
 
     @Override public void onConfigurationChanged(Configuration c) {
         super.onConfigurationChanged(c);
-        call("configurationChanged", new Class[]{Configuration.class}, c);
+        if (player == null) return;
+        try {
+            player.getClass().getMethod("configurationChanged", Configuration.class)
+                    .invoke(player, c);
+        } catch (Throwable ignored) {
+        }
     }
 
     @Override public boolean dispatchKeyEvent(KeyEvent e) {
         if (player != null) {
             try {
-                Method m = player.getClass().getMethod("injectEvent", KeyEvent.class);
-                Object r = m.invoke(player, e);
+                Object r = player.getClass().getMethod("injectEvent", KeyEvent.class)
+                        .invoke(player, e);
                 if (Boolean.TRUE.equals(r)) return true;
             } catch (Throwable ignored) {
             }
@@ -146,7 +214,7 @@ public final class UnityActivity extends Activity {
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {
-        // the plugin view has no view ids to save; skip the hierarchy walk
+        // the engine view has no ids worth saving; skip the hierarchy walk
     }
 
     // ── the game's identity, answered by our own activity ────────────────────────────────
