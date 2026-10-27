@@ -79,6 +79,15 @@ public final class UnityActivity extends Activity {
         log("external=" + getExternalFilesDir(null));
         log("libs=" + getApplicationInfo().nativeLibraryDir);
         log("codePath=" + getPackageCodePath());
+        try {
+            android.net.ConnectivityManager cm =
+                    (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            android.net.Network n = cm.getActiveNetwork();
+            log("network=" + n + " caps="
+                    + (n == null ? "-" : cm.getNetworkCapabilities(n)));
+        } catch (Throwable t) {
+            log("network check failed (missing permission?): " + t);
+        }
         log("resPath=" + getPackageResourcePath());
         ClassLoader cl = s.loader();
 
