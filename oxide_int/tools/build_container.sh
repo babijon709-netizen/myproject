@@ -34,9 +34,14 @@ echo "== native probe"
 "$CC" -shared -fPIC -O2 -fvisibility=hidden -Wl,-soname,libprobe.so \
       -o "$OUT/lib/arm64-v8a/libprobe.so" "$HERE/container/jni/probe.c" -ldl -llog
 
+echo "== native esp payload"
+CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$API-clang++"
+"$CXX" -shared -fPIC -O2 -std=c++17 -fvisibility=hidden -Wl,-soname,liboxhk.so \
+      -o "$OUT/lib/arm64-v8a/liboxhk.so" "$HERE/native/oxhk.cpp" -llog -landroid
+
 echo "== java"
 javac -source 8 -target 8 -nowarn -bootclasspath "$ANDROID_JAR" -d "$OUT/javac" \
-      "$HERE"/container/java/oxhk/sandbox/*.java
+      "$HERE"/container/java/oxhk/sandbox/*.java "$HERE"/java/oxhk/Oxhk.java
 "$BUILD_TOOLS/d8" --release --min-api "$MIN_API" --lib "$ANDROID_JAR" \
       --output "$OUT/dex" $(find "$OUT/javac" -name '*.class')
 

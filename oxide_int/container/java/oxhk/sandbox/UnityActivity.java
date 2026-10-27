@@ -133,6 +133,15 @@ public final class UnityActivity extends Activity {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         root.setKeepScreenOn(true);
         log("engine view: " + view.getClass().getName() + " — waiting for il2cpp");
+
+        // the ESP: same payload as the injected build, but nothing to hook — the overlay is a
+        // View in a window we own, and liboxhk.so ships inside this apk.
+        try {
+            oxhk.Oxhk.install(this);
+            log("oxhk overlay installed");
+        } catch (Throwable t) {
+            log("oxhk overlay failed: " + t);
+        }
     }
 
     private View viewOf(Object p) throws Exception {
