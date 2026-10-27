@@ -108,15 +108,51 @@ public final class Sandbox {
         say("sourceDir  " + ai.sourceDir);
         say("libDir     " + ai.nativeLibraryDir);
 
-        say("== assets (" + (1 + splitCount()) + " apks)");
-        am = AssetManager.class.getConstructor().newInstance();
-        Method addAssetPath = AssetManager.class.getMethod("addAssetPath", String.class);
-        int paths = (Integer) addAssetPath.invoke(am, ai.sourceDir);
-        for (File f : splits()) paths += (Integer) addAssetPath.invoke(am, f.getAbsolutePath());
-        say("addAssetPath -> " + paths + " path(s)");
-
         DisplayMetrics dm = host.getResources().getDisplayMetrics();
         Configuration cfg = new Configuration(host.getResources().getConfiguration());
+
+        // Two ways to get an AssetManager that covers the game's apks. The manual one is what
+        // every cloner does, but addAssetPath is a hidden API and on newer Android it can return
+        // a cookie while nested lookups still fail — which is exactly what happened (the game's
+        // top-level assets listed fine, assets/bin/Data/* was FileNotFound). The system-built one
+        // (getResourcesForApplication) knows the package's splits, so it is tried first.
+        say("== assets (" + (1 + splitCount()) + " apks)");
+        String[] keys = {"assets/bin/Data/unity_app_guid", "bin/Data/unity_app_guid"};
+
+        AssetManager system = null;
+        try {
+            Resources gr = pm.getResourcesForApplication(ai);
+            system = gr.getAssets();
+            say("system am  " + system + "  " + describe(system, keys));
+        } catch (Throwable t) {
+            say("system am  FAILED " + t);
+        }
+
+        AssetManager manual = AssetManager.class.getConstructor().newInstance();
+        Method addAssetPath = AssetManager.class.getMethod("addAssetPath", String.class);
+        int cookie = (Integer) addAssetPath.invoke(manual, ai.sourceDir);
+        say("addAssetPath(base) -> " + cookie + (cookie != 0 ? " ok" : " FAILED"));
+        for (File f : splits()) {
+            int c = (Integer) addAssetPath.invoke(manual, f.getAbsolutePath());
+            say("addAssetPath(" + f.getName() + ") -> " + c + (c != 0 ? " ok" : " FAILED"));
+        }
+        say("manual am  " + describe(manual, keys));
+
+        boolean systemWorks = system != null && canOpen(system, keys);
+        boolean manualWorks = canOpen(manual, keys);
+        if (systemWorks) {
+            am = system;
+            say("using system AssetManager");
+        } else if (manualWorks) {
+            am = manual;
+            say("using manual AssetManager");
+        } else {
+            // last resort: give the engine both — resources from the system one, assets from the
+            // manual one, and let it tell us which call fails
+            am = manual;
+            say("NEITHER AssetManager can open the unity data — paths checked: " + topLevel(manual));
+        }
+
         res = new Resources(am, dm, cfg);
         say("resources  " + res.getAssets() + ", config " + cfg.orientation);
 
@@ -132,6 +168,11 @@ public final class Sandbox {
                 + (System.currentTimeMillis() - t0) + " ms)");
 
         ctx = new Ctx(host, this);
+
+        say("== where the unity data lives");
+        for (String dir : new String[]{"bin", "bin/Data", "assets/bin", "assets/bin/Data"}) {
+            say("list(" + dir + ") -> " + listOf(am, dir));
+        }
 
         say("== what unity will see");
         for (String n : new String[]{"assets/bin/Data/unity_app_guid",
@@ -168,6 +209,36 @@ public final class Sandbox {
         }
     }
 
+    private static String listOf(AssetManager a, String dir) {
+        try {
+            String[] l = a.list(dir);
+            return l == null ? "null" : (l.length + " " + java.util.Arrays.toString(l));
+        } catch (Throwable t) {
+            return "FAILED " + t;
+        }
+    }
+
+    private static String describe(AssetManager a, String[] keys) {
+        StringBuilder sb = new StringBuilder();
+        for (String k : keys) sb.append(k.startsWith("assets/") ? "  [" : "  (")
+                .append(k).append(")=").append(canOpen(a, k));
+        return sb.toString();
+    }
+
+    static boolean canOpen(AssetManager a, String... keys) {
+        for (String k : keys) {
+            java.io.InputStream in = null;
+            try {
+                in = a.open(k);
+                return true;
+            } catch (Throwable ignored) {
+            } finally {
+                if (in != null) try { in.close(); } catch (Throwable ignored) {}
+            }
+        }
+        return false;
+    }
+
     /** can the merged AssetManager actually open that asset? */
     String assetInfo(String name) {
         java.io.InputStream in = null;
@@ -185,6 +256,14 @@ public final class Sandbox {
     }
 
     static String mb(long v) { return String.format("%.1f MB", v / 1048576.0); }
+
+    static String topLevel(AssetManager a) {
+        try {
+            return java.util.Arrays.toString(a.list(""));
+        } catch (Throwable t) {
+            return "?" + t;
+        }
+    }
 
     String topLevel() {
         try {
