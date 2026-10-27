@@ -78,6 +78,8 @@ public final class UnityActivity extends Activity {
         log("files=" + getFilesDir());
         log("external=" + getExternalFilesDir(null));
         log("libs=" + getApplicationInfo().nativeLibraryDir);
+        log("codePath=" + getPackageCodePath());
+        log("resPath=" + getPackageResourcePath());
         ClassLoader cl = s.loader();
 
         // IUnityPlayerLifecycleEvents: two methods, so a Proxy is enough
@@ -252,6 +254,22 @@ public final class UnityActivity extends Activity {
             return s.assets();
         } catch (Throwable t) {
             return super.getAssets();
+        }
+    }
+
+    @Override public String getPackageCodePath() {
+        try {
+            return s.appInfo().sourceDir;
+        } catch (Throwable t) {
+            return super.getPackageCodePath();
+        }
+    }
+
+    @Override public String getPackageResourcePath() {
+        try {
+            return s.appInfo().sourceDir;
+        } catch (Throwable t) {
+            return super.getPackageResourcePath();
         }
     }
 
