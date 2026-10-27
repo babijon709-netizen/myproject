@@ -136,6 +136,47 @@ jobs:
           path: oxide_int/build/injector/*.apk
           if-no-files-found: error
 
+  sandbox:
+    name: sandbox probe apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: toolchain
+        run: |
+          set -e
+          SDK="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          NDK="$(ls -d "$SDK"/ndk/* | sort -V | tail -1)"
+          echo "SDK=$SDK"              >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+
+      - name: build sandbox probe
+        run: |
+          set -o pipefail
+          bash -x ./oxide_int/tools/build_container.sh 2>&1 | tee "$RUNNER_TEMP/sandbox.log"
+
+      - name: report failure
+        if: failure()
+        run: |
+          set -e
+          cp "$RUNNER_TEMP/sandbox.log" ci-last-failure.log || echo "no log" > ci-last-failure.log
+          git config user.name  "ci"
+          git config user.email "ci@users.noreply.github.com"
+          git add -f ci-last-failure.log
+          git commit -m "ci: sandbox build log for ${GITHUB_SHA:0:7} [skip ci]" || true
+          git push || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oxhk-sandbox-apk
+          path: oxide_int/build/sandbox/*.apk
+          if-no-files-found: error
+
   repack:
     name: repack game apk
     needs: payload
