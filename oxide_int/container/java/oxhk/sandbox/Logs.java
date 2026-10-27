@@ -5,7 +5,6 @@
 package oxhk.sandbox;
 
 import android.content.Context;
-import android.os.Process;
 import android.util.Log;
 
 import java.io.BufferedReader;
@@ -22,11 +21,11 @@ public final class Logs {
     /** last {@code maxLines} lines of this process' logcat. */
     public static String recent(int maxLines) {
         StringBuilder sb = new StringBuilder();
-        Process p = null;
+        java.lang.Process p = null;
         try {
             p = Runtime.getRuntime().exec(new String[]{
                     "/system/bin/logcat", "-d", "-v", "time", "-t", String.valueOf(maxLines),
-                    "--pid=" + Process.myPid()});
+                    "--pid=" + android.os.Process.myPid()});
             BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()), 65536);
             String line;
             while ((line = r.readLine()) != null) sb.append(line).append('\n');
@@ -40,7 +39,7 @@ public final class Logs {
         if (sb.length() == 0) {
             // some roms filter by pid differently; fall back to a tag dump
             try {
-                Process q = Runtime.getRuntime().exec(new String[]{
+                java.lang.Process q = Runtime.getRuntime().exec(new String[]{
                         "/system/bin/logcat", "-d", "-v", "time", "-t",
                         String.valueOf(maxLines), "-s", "oxhk.sandbox:V", "Unity:V"});
                 BufferedReader r = new BufferedReader(new InputStreamReader(q.getInputStream()));
