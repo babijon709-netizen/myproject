@@ -184,6 +184,8 @@ public final class Sandbox {
         }
     }
 
+    static String mb(long v) { return String.format("%.1f MB", v / 1048576.0); }
+
     String topLevel() {
         try {
             String[] l = am.list("");
