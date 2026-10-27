@@ -84,6 +84,53 @@ signature locally, go straight to the full build. Dies silently / black screen /
 splash → the check is in `libloader`, and that is a separate reverse job (`JNI_OnLoad`,
 `.gcc_r`/`.dyncl` tables) before any of this is usable.
 
+
+## what the two "armor" libs actually are
+
+`libpglarmor.so` — **not** anti-cheat. Its only JNI export is
+`Java_dtGga4_xpqSb3_qbL4k4_dnIeo4_s3o1l7_eaokX6_bc` and the java side that calls it is
+`...dnIeo4.s3o1l7.eaokX6` with `cypher4Encrypt/cypher4Decrypt`, log tag `pangle-encrypt`,
+`ARMOR`, and Pangle payload classes around it. It's the Pangle/TikTok **ads** crypto, keys and
+all. Ignore it.
+
+`libloader.so` — the only unknown left. Encrypted `.text` (entropy 7.16), `.gcc_r` `.dyncl`
+`.ctx` `.eh_trace` `.adi` sections, one export (`JNI_OnLoad`). Its import table is the map of
+what it can see:
+
+| import | meaning |
+|---|---|
+| `android_dlopen_ext`, `dl_iterate_phdr`, `dladdr`, `dlsym`, `dlerror` | loads/inspects libs itself (this is who maps libil2cpp + libunity) |
+| `inflate/inflateInit2_` | unpacks the encrypted `assets/bin/Data/c1a4ee66...` blob → global-metadata |
+| `nftw`, `opendir/readdir/stat/lstat`, `access` | walks directories — apk contents, lib dir, or /proc |
+| `getxattr/fgetxattr/listxattr/flistxattr` | reads file attributes on the apk/lib files |
+| `fork`, `kill`, `getppid`, `prctl`, `syscall`, `getauxval` | classic anti-debug / anti-hook moves |
+| `__system_property_get/find`, `uname`, `getenv` | device + process fingerprinting |
+| `socket/connect/getaddrinfo`, `mmap/mprotect/mremap`, `sigaction`, `epoll*` | full runtime inside the lib |
+
+Whether *signature* enforcement lives in there is still an open question. Nothing in java asks
+for it: `qCXAY9.*` (classes7.dex) enumerates installed packages, installer package and dumps
+`PackageInfo` to JSON — that is ad attribution, and `dtGga4...jPsie4.updateUnityCommandLineArguments`
+just rewrites launch args.
+
+## finding out instead of guessing
+
+```bash
+# 1. baseline on the store build — what the game asks of PackageManager when nothing is patched
+frida -U -f com.catsbit.oxidesurvivalisland -l tools/probe_sig.js --no-pause
+
+# 2. same script on the repack
+frida -U -f com.catsbit.oxidesurvivalisland -l tools/probe_sig.js --no-pause
+```
+
+`tools/probe_sig.js` logs every `getPackageInfo` (marks `GET_SIGNATURES` = 0x40), every
+`MessageDigest.digest`, every `System.loadLibrary`/`load`, and every native `dlopen` with its
+caller. Diff the two runs:
+
+* no `getPackageInfo` with the signature flag in either run → nothing in the process cares
+  about certs, the probe build will boot
+* the store build asks, the repack throws / the call disappears → something native is parsing
+  the apk itself, and the check sits in `libloader`
+
 ## build
 
 ```bash
