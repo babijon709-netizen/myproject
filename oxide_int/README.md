@@ -355,6 +355,29 @@ Buttons: `1. start game application`, `2. launch unity`, plus the stage-0 probe.
 Next: ESP overlay on top of the Unity view (we own the window, so it is a plain `addView`), then
 the menu. Since the process is ours, the payload needs no bootstrap trick at all.
 
+
+### sandbox / container: what actually blocks the boot
+
+The game shows Unity's `Error: Not enough storage space to install required resources.` right after
+the splash. Where it comes from, exactly (found by xref on the string in `libunity.so`, file offset
+`0x10799f`, VA `0x10799f` → single reference at `0x92f4ac`):
+
+    ...  "  il2cpp failed to extract resources ('%s' => '%s')\n"
+    ...  "assets/bin/Data/unity_app_guid is empty. Will re-extract il2cpp resources on next run.\n"
+    ...  title "Error" + this message -> dialog
+
+So it is not Play Asset Delivery (that was a wrong first guess) and it is not a full disk: the engine
+is **extracting the il2cpp resources out of the apk into a writable directory, and the space check on
+that destination fails**. The destination is derived from the package name, i.e. the game's external
+dir `/storage/emulated/0/Android/data/com.catsbit.oxidesurvivalisland/…`, which a container may not
+write to without all-files access. The `('%s' => '%s')` log line prints source and destination, so the
+next run's logcat names the exact path.
+
+`container/java/oxhk/sandbox/Logs.java` — own-uid logcat (logd filters by uid, so logs of dead runs
+come back too), plus an uncaught-exception trap and `last-run.txt`: the container's whole trace is
+written to disk while it runs, and shown at the next start. `MainActivity` gained
+`grant all-files access` (writes and probes `<game>/files`, `<game>/cache`, `<game>/files/unity`).
+
 ## container plan (route B): why a probe comes before code
 
 A dual-space container (VirtualApp style) would leave the game's apks bit-identical and store-signed,
