@@ -90,33 +90,40 @@ public final class Oxhk {
         }
     }
 
+    // anonymous classes, not lambdas: the dex is compiled with android.jar as bootclasspath,
+    // where java.lang.invoke.LambdaMetafactory does not exist.
     private static void attach(final Activity a) {
         if (a == null || a == sActivity) return;
-        a.runOnUiThread(() -> {
-            try {
-                sActivity = a;
-                loadConfig(a);
-                if (sView == null) sView = new EspView(a);
-                final ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
-                Runnable add = () -> {
-                    try {
-                        if (sView.getParent() == null) {
-                            decor.addView(sView, new FrameLayout.LayoutParams(
-                                    ViewGroup.LayoutParams.MATCH_PARENT,
-                                    ViewGroup.LayoutParams.MATCH_PARENT));
+        a.runOnUiThread(new Runnable() {
+            @Override public void run() {
+                try {
+                    sActivity = a;
+                    loadConfig(a);
+                    if (sView == null) sView = new EspView(a);
+                    final ViewGroup decor = (ViewGroup) a.getWindow().getDecorView();
+                    Runnable add = new Runnable() {
+                        @Override public void run() {
+                            try {
+                                if (sView.getParent() == null) {
+                                    decor.addView(sView, new FrameLayout.LayoutParams(
+                                            ViewGroup.LayoutParams.MATCH_PARENT,
+                                            ViewGroup.LayoutParams.MATCH_PARENT));
+                                }
+                                sView.bringToFront();
+                                pushConfig();
+                                nativeInit(a.getFilesDir().getAbsolutePath(),
+                                           decor.getWidth(), decor.getHeight());
+                                Log.i(TAG, "overlay attached to " + a.getClass().getName());
+                            } catch (Throwable t) {
+                                Log.e(TAG, "attach(run) failed", t);
+                            }
                         }
-                        sView.bringToFront();
-                        pushConfig();
-                        nativeInit(a.getFilesDir().getAbsolutePath(), decor.getWidth(), decor.getHeight());
-                        Log.i(TAG, "overlay attached to " + a.getClass().getName());
-                    } catch (Throwable t) {
-                        Log.e(TAG, "attach(run) failed", t);
-                    }
-                };
-                if (ATTACH_DELAY_MS > 0) decor.postDelayed(add, ATTACH_DELAY_MS);
-                else add.run();
-            } catch (Throwable t) {
-                Log.e(TAG, "attach failed", t);
+                    };
+                    if (ATTACH_DELAY_MS > 0) decor.postDelayed(add, ATTACH_DELAY_MS);
+                    else add.run();
+                } catch (Throwable t) {
+                    Log.e(TAG, "attach failed", t);
+                }
             }
         });
     }
