@@ -284,7 +284,10 @@ the section above, straight from CI.
 artifact `oxhk-injector-apk`). One screen, one button:
 
 1. reads the installed game: `applicationInfo.sourceDir` + `splitSourceDirs`
-   (`/data/app/.../base.apk` is world-readable, no root needed)
+   (`/data/app/.../base.apk` is world-readable, no root needed). This game ships **four**
+   splits — `split_config.arm64_v8a`, `split_config.xxhdpi`, `split_UnityDataAssetPack`
+   (92 MB) — so the arm64 one is picked by content (`lib/arm64-v8a/libil2cpp.so` inside),
+   never by position.
 2. **base.apk**: rewrites the manifest's `<application android:name>` string in place — the
    binary XML string pool entry for `dtGga4.sNBtq9.vRXcl4.pm7o47` becomes `oxhk.App` (shorter,
    so no offsets move, tail is zero-filled). Adds the payload dex as `classes<N+1>.dex`.
@@ -292,8 +295,10 @@ artifact `oxhk-injector-apk`). One screen, one button:
 4. drops old `META-INF/*.SF|RSA|DSA|EC`, signs both with **apksig** (the lib inside
    `build-tools/*/lib/apksigner.jar`, v1+v2+v3) using a PKCS12 key baked into the injector's
    assets at build time
-5. hands base+split to `PackageInstaller` in one session (`MODE_FULL_INSTALL`), so the system
-   installs them as one app
+5. hands base **plus every split** to `PackageInstaller` in one session (`MODE_FULL_INSTALL`) —
+   a split app will not install from a partial set. Untouched splits are streamed through
+   (64 KB buffer, original STORED/DEFLATED method kept) so the 92 MB asset pack never enters the
+   heap, then re-signed — one certificate for the whole app, no way around it.
 
 `oxhk.App` is compiled against a stub of the game's Application class
 (`injector/stub/java/dtGga4/.../pm7o47.java`); the stub is kept out of the payload dex, so at
