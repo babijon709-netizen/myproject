@@ -37,6 +37,11 @@ public final class Sandbox {
 
     public interface Sink { void line(String s); }
 
+    /** answer with the game's package name, or with our own — the engine derives its data paths
+     *  from it (getExternalFilesDir/getExternalCacheDir are called through JNI), so this decides
+     *  whether Unity writes next to our apk or into the game's external dir. */
+    public static volatile boolean SPOOF = true;
+
     private static Sandbox instance;
     private static Sink log;
 
@@ -127,6 +132,18 @@ public final class Sandbox {
                 + (System.currentTimeMillis() - t0) + " ms)");
 
         ctx = new Ctx(host, this);
+
+        say("== what unity will see");
+        for (String n : new String[]{"assets/bin/Data/unity_app_guid",
+                "assets/bin/Data/data.unity3d",
+                "assets/bin/Data/Managed/Metadata/global-metadata.dat"}) {
+            say("asset " + n + ": " + assetInfo(n));
+        }
+        say("top-level: " + topLevel());
+        say("files      " + host.getFilesDir() + "  free " + mb(host.getFilesDir().getUsableSpace()));
+        say("cache      " + host.getCacheDir() + "  free " + mb(host.getCacheDir().getUsableSpace()));
+        say("extFiles   " + host.getExternalFilesDir(null));
+        say("extCache   " + host.getExternalCacheDir());
         say("ok");
     }
 
@@ -148,6 +165,31 @@ public final class Sandbox {
         } catch (Throwable t) {
             say("onCreate threw: " + t.getClass().getName() + ": " + t.getMessage());
             Log.e(TAG, "application onCreate", t);
+        }
+    }
+
+    /** can the merged AssetManager actually open that asset? */
+    String assetInfo(String name) {
+        java.io.InputStream in = null;
+        try {
+            in = am.open(name);
+            byte[] buf = new byte[1 << 16];
+            int n = 0, r;
+            while ((r = in.read(buf)) > 0) n += r;
+            return n + " B (readable)";
+        } catch (Throwable t) {
+            return "FAILED " + t.getClass().getSimpleName() + ": " + t.getMessage();
+        } finally {
+            if (in != null) try { in.close(); } catch (Throwable ignored) {}
+        }
+    }
+
+    String topLevel() {
+        try {
+            String[] l = am.list("");
+            return java.util.Arrays.toString(l);
+        } catch (Throwable t) {
+            return "?" + t;
         }
     }
 
@@ -180,12 +222,12 @@ public final class Sandbox {
             this.s = s;
         }
 
-        @Override public String getPackageName() { return GAME; }
+        @Override public String getPackageName() { return SPOOF ? GAME : super.getPackageName(); }
         @Override public ClassLoader getClassLoader() { return s.loader; }
         @Override public Resources getResources() { return s.res; }
         @Override public AssetManager getAssets() { return s.am; }
         @Override public ApplicationInfo getApplicationInfo() { return s.ai; }
         @Override public Context getApplicationContext() { return s.app != null ? s.app : this; }
-        @Override public String getOpPackageName() { return GAME; }
+        @Override public String getOpPackageName() { return SPOOF ? GAME : super.getOpPackageName(); }
     }
 }

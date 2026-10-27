@@ -51,6 +51,7 @@ public final class MainActivity extends Activity {
 
     private TextView log;
     private Button run;
+    private android.widget.CheckBox spoof;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -90,6 +91,19 @@ public final class MainActivity extends Activity {
             @Override public void onClick(View v) { allFiles(); }
         });
         root.addView(stage3, lp());
+
+        spoof = new android.widget.CheckBox(this);
+        spoof.setText("spoof game package name (game identity)");
+        spoof.setChecked(Sandbox.SPOOF);
+        spoof.setTextColor(0xFFD6D6D6);
+        spoof.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        spoof.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                Sandbox.SPOOF = on;
+                append("spoof package name: " + on);
+            }
+        });
+        root.addView(spoof, lp());
 
         Button logs = new Button(this);
         logs.setText("dump logcat");
@@ -199,7 +213,7 @@ public final class MainActivity extends Activity {
         Intent i = new Intent(Intent.ACTION_SEND);
         i.setType("text/plain");
         i.putExtra(Intent.EXTRA_TEXT, log.getText().toString());
-        i.putExtra(Intent.EXTRA_STREAM, android.net.Uri.fromFile(f));
+        append("log file: " + f);
         startActivity(Intent.createChooser(i, "share probe log"));
     }
 

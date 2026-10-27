@@ -224,11 +224,11 @@ public final class UnityActivity extends Activity {
     // ── the game's identity, answered by our own activity ────────────────────────────────
 
     @Override public String getPackageName() {
-        return Sandbox.GAME;
+        return Sandbox.SPOOF ? Sandbox.GAME : super.getPackageName();
     }
 
     @Override public String getOpPackageName() {
-        return Sandbox.GAME;
+        return Sandbox.SPOOF ? Sandbox.GAME : super.getOpPackageName();
     }
 
     @Override public ClassLoader getClassLoader() {
