@@ -36,8 +36,14 @@ echo "== native probe"
 
 echo "== native esp payload"
 CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$API-clang++"
-"$CXX" -shared -fPIC -O2 -std=c++17 -fvisibility=hidden -Wl,-soname,liboxhk.so \
-      -o "$OUT/lib/arm64-v8a/liboxhk.so" "$HERE/native/oxhk.cpp" -llog -landroid
+"$CXX" -shared -fPIC -O2 -std=c++17 -fvisibility=hidden -static-libstdc++ \
+      -Wl,-soname,liboxhk.so -o "$OUT/lib/arm64-v8a/liboxhk.so" \
+      "$HERE/native/oxhk.cpp" -llog -landroid
+
+echo "== check deps"
+bad=$(readelf -d "$OUT/lib/arm64-v8a/liboxhk.so" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p' \
+      | grep -Ev '^(liblog|libandroid|libm|libdl|libc|libz)\.so$' || true)
+[ -z "$bad" ] || { echo "liboxhk.so needs non-system libs: $bad"; exit 1; }
 
 echo "== java"
 javac -source 8 -target 8 -nowarn -bootclasspath "$ANDROID_JAR" -d "$OUT/javac" \

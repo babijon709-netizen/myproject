@@ -45,6 +45,11 @@ verify_artifacts() {
       || { echo "nativeInit missing"; exit 1; }
   [ "$(head -c 3 "$dex")" = "dex" ] || { echo "classes.dex has no dex magic"; exit 1; }
   grep -qa 'oxhk/Oxhk' "$dex" || { echo "classes.dex does not contain oxhk/Oxhk"; exit 1; }
+  # only system libs may be needed: anything else has to be inside our apk
+  local bad
+  bad=$(readelf -d "$so" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p' \
+        | grep -Ev '^(liblog|libandroid|libm|libdl|libc|libz)\.so$' || true)
+  [ -z "$bad" ] || { echo "liboxhk.so depends on a non-system lib: $bad"; exit 1; }
   echo "   liboxhk.so $(stat -c%s "$so") B, classes.dex $(stat -c%s "$dex") B"
 }
 
@@ -52,7 +57,10 @@ verify_artifacts() {
 if [ "$MODE" != probe ]; then
   CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$API-clang++"
   echo "== native"
-  "$CC" -shared -fPIC -O2 -std=c++17 -fvisibility=hidden -Wl,-soname,liboxhk.so \
+  # -static-libstdc++: without it the .so depends on libc++_shared.so, which is not in the game's
+  # lib dir on every build, and dlopen then fails with "library libc++_shared.so not found"
+  "$CC" -shared -fPIC -O2 -std=c++17 -fvisibility=hidden -static-libstdc++ \
+        -Wl,-soname,liboxhk.so -Wl,--no-undefined \
         -o "$OUT/liboxhk.so" "$HERE/native/oxhk.cpp" -llog -landroid
 
   echo "== java"
