@@ -58,7 +58,16 @@ public final class UnityActivity extends Activity {
 
         try {
             s.init();
-            s.startApplication();
+            // start the game's Application under OUR real identity: its Firebase/GMS init runs
+            // here, and GMS validates uid against the package name, so spoofing during onCreate
+            // only produces SecurityExceptions that kill the process later.
+            boolean spoof = Sandbox.SPOOF;
+            Sandbox.SPOOF = false;
+            try {
+                s.startApplication();
+            } finally {
+                Sandbox.SPOOF = spoof;
+            }
             try {
                 boot();
             } catch (Throwable t) {

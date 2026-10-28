@@ -89,7 +89,7 @@ public final class Logs {
 
     public static void installCrashHandler(final Context c) {
         final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
-        Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+        final Thread.UncaughtExceptionHandler ours = new Thread.UncaughtExceptionHandler() {
             @Override public void uncaughtException(Thread t, Throwable e) {
                 // The game runs with a spoofed package name, so GMS/Firebase — which validate the
                 // real caller uid against the package — throw SecurityException on their own
@@ -121,31 +121,35 @@ public final class Logs {
                 Log.e(TAG, "uncaught", e);
                 if (prev != null) prev.uncaughtException(t, e);
             }
-        });
+        };
+        Thread.setDefaultUncaughtExceptionHandler(ours);
+        Thread.currentThread().setUncaughtExceptionHandler(ours);   // main thread
     }
 
-    /** is this exception only a consequence of our package spoof? */
+    /** is this exception only a consequence of our package spoof?
+     *
+     *  The frames are obfuscated (`m7.er`), and the only GMS marker is the source-file suffix
+     *  (`:com.google.android.gms.dynamite_measurementdynamite@…`), so matching on
+     *  StackTraceElement.getClassName() never hits. Unity also rethrows the failure as a plain
+     *  java.lang.Error with the original text inside its message. Both cases need the flattened
+     *  string, not the structured one. */
     private static boolean foreign(Thread t, Throwable e) {
-        String msg = String.valueOf(e.getMessage());
-        if (msg.contains("com.google.android.gms")
-                || msg.contains("dynamite_measurementdynamite")
-                || msg.contains("Unknown calling package name")
-                || msg.contains("does not belong to")
-                || msg.contains("cannot schedule job in")) {
-            return true;
+        String text;
+        try {
+            text = Log.getStackTraceString(e);
+        } catch (Throwable ignored) {
+            text = String.valueOf(e) + "\n" + java.util.Arrays.toString(e.getStackTrace());
         }
-        Throwable c = e;
-        int depth = 0;
-        while (c != null && depth++ < 6) {
-            for (StackTraceElement el : c.getStackTrace()) {
-                String cl = el.getClassName();
-                if (cl.startsWith("com.google.android.gms")
-                        || cl.startsWith("com.google.firebase")
-                        || cl.startsWith("com.google.android.play.core")) {
-                    return true;
-                }
-            }
-            c = c.getCause();
+        String[] markers = {
+                "Unknown calling package name",
+                "does not belong to",
+                "cannot schedule job in",
+                "com.google.android.gms",
+                "dynamite_measurementdynamite",
+                "com.google.firebase",
+        };
+        for (String m : markers) {
+            if (text.contains(m)) return true;
         }
         String name = t.getName();
         return name.startsWith("Measurement") || name.startsWith("Firebase")
