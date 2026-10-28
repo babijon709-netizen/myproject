@@ -127,7 +127,9 @@ public final class Logs {
     /** is this exception only a consequence of our package spoof? */
     private static boolean foreign(Thread t, Throwable e) {
         String msg = String.valueOf(e.getMessage());
-        if (msg.contains("Unknown calling package name")
+        if (msg.contains("com.google.android.gms")
+                || msg.contains("dynamite_measurementdynamite")
+                || msg.contains("Unknown calling package name")
                 || msg.contains("does not belong to")
                 || msg.contains("cannot schedule job in")) {
             return true;

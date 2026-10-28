@@ -53,7 +53,8 @@ echo "== link apk"
 
 echo "== dex + lib"
 ( cd "$OUT/dex" && zip -0 -X -q "$OUT/apk/unsigned.apk" classes.dex )
-(cd "$OUT" && zip -0 -X -q apk/unsigned.apk lib/arm64-v8a/libprobe.so)
+(cd "$OUT" && zip -0 -X -q apk/unsigned.apk \
+        lib/arm64-v8a/libprobe.so lib/arm64-v8a/liboxhk.so)
 
 echo "== align + sign"
 if [ ! -f "$KEYSTORE" ]; then
