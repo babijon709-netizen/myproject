@@ -24,6 +24,8 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <signal.h>
+#include <unwind.h>
 
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 1
@@ -94,6 +96,67 @@ static void step_maps(char *b, size_t cap) {
     }
     fclose(f);
     add(b, cap, "%-10s %d lines, libprobe %d, foreign libmain %d\n", "maps", total, ours, exec);
+}
+
+
+// ── always-on fault recorder ────────────────────────────────────────────────────────────
+// The packer may set PR_SET_DUMPABLE(0), in which case a SIGSEGV leaves no tombstone and no
+// logcat trace at all — the process just vanishes. This recorder is installed by the sandbox
+// itself (not by the ESP), so any native fault in engine or packer code is written to a file
+// with a real backtrace.
+static char g_crashPath[512];
+static volatile sig_atomic_t g_inHandler = 0;
+
+struct BtFrame { uintptr_t pc[24]; int n; };
+
+static _Unwind_Reason_Code bt_cb(struct _Unwind_Context* ctx, void* arg) {
+    struct BtFrame* f = (struct BtFrame*) arg;
+    uintptr_t pc = _Unwind_GetIP(ctx);
+    if (pc && f->n < 24) f->pc[f->n++] = pc;
+    return f->n < 24 ? _URC_NO_REASON : _URC_END_OF_STACK;
+}
+
+static void fault_handler(int sig, siginfo_t* si, void*) {
+    if (g_inHandler) _exit(9);
+    g_inHandler = 1;
+    char buf[1024];
+    struct BtFrame f{{}, 0};
+    _Unwind_Backtrace(bt_cb, &f);
+    int n = snprintf(buf, sizeof buf, "SIG %d (%s) addr=%p code=%d\n", sig, strsignal(sig),
+                     si ? si->si_addr : nullptr, si ? si->si_code : 0);
+    for (int i = 0; i < f.n && n < (int) sizeof buf - 32; ++i)
+        n += snprintf(buf + n, sizeof buf - n, "  #%d %p\n", i, (void*) f.pc[i]);
+    int fd = open(g_crashPath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) {
+        ssize_t ignored = write(fd, buf, (size_t) n);
+        (void) ignored;
+        close(fd);
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+JNIEXPORT void JNICALL
+Java_oxhk_sandbox_MainActivity_nativeGuard(JNIEnv* env, jclass, jstring jDir) {
+    if (!jDir) return;
+    const char* d = (*env)->GetStringUTFChars(env, jDir, nullptr);
+    if (!d) return;
+    snprintf(g_crashPath, sizeof g_crashPath, "%s/native-crash.txt", d);
+    (*env)->ReleaseStringUTFChars(env, jDir, d);
+
+    static char altstack[64 * 1024];
+    stack_t ss{};
+    ss.ss_size = sizeof altstack;
+    ss.ss_sp = altstack;
+    sigaltstack(&ss, nullptr);
+
+    struct sigaction sa{};
+    sa.sa_sigaction = fault_handler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+    sigemptyset(&sa.sa_mask);
+    int sigs[] = {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE};
+    for (unsigned i = 0; i < sizeof sigs / sizeof sigs[0]; ++i) sigaction(sigs[i], &sa, nullptr);
+    __android_log_print(ANDROID_LOG_INFO, TAG, "fault recorder armed: %s", g_crashPath);
 }
 
 JNIEXPORT jstring JNICALL

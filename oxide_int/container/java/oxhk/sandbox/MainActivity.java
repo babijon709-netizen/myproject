@@ -48,6 +48,7 @@ public final class MainActivity extends Activity {
     }
 
     private static native String nativeProbe(String gameLib, String copy, byte[] libBytes);
+    static native void nativeGuard(String filesDir);
 
     private TextView log;
     private Button run;
@@ -174,6 +175,11 @@ public final class MainActivity extends Activity {
 
         setContentView(root);
         Logs.installCrashHandler(this);
+        try {
+            nativeGuard(getFilesDir().getAbsolutePath());
+        } catch (Throwable t) {
+            Log.w(TAG, "native guard failed: " + t);
+        }
         append("all files access: " + android.os.Environment.isExternalStorageManager()
                 + "; logcat is uid-wide");
         String run = Logs.lastRun(this);

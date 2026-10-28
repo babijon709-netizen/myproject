@@ -311,13 +311,22 @@ public final class Sandbox {
         @Override public ClassLoader getClassLoader() { return s.loader; }
         @Override public Resources getResources() { return s.res; }
         @Override public AssetManager getAssets() { return s.am; }
-        @Override public ApplicationInfo getApplicationInfo() { return s.ai; }
+        // must agree with getPackageName(): a package name from one app and an ApplicationInfo
+        // from another is exactly what made the engine constructor throw in "own identity" mode
+        @Override public ApplicationInfo getApplicationInfo() {
+            return SPOOF ? s.ai : super.getApplicationInfo();
+        }
 
         // Unity reads assets/bin/Data/* out of the apk *file* (its own unzip), asking the
         // context for the code path. Our host answers with its own apk unless we say otherwise —
         // that is what "Failed to read assets/bin/Data/unity_app_guid" was.
-        @Override public String getPackageCodePath() { return s.ai.sourceDir; }
-        @Override public String getPackageResourcePath() { return s.ai.sourceDir; }
+        @Override public String getPackageCodePath() {
+            return SPOOF ? s.ai.sourceDir : super.getPackageCodePath();
+        }
+
+        @Override public String getPackageResourcePath() {
+            return SPOOF ? s.ai.sourceDir : super.getPackageResourcePath();
+        }
         @Override public Context getApplicationContext() { return s.app != null ? s.app : this; }
         @Override public String getOpPackageName() { return SPOOF ? GAME : super.getOpPackageName(); }
     }

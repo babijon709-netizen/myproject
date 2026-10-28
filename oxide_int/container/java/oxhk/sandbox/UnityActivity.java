@@ -179,17 +179,45 @@ public final class UnityActivity extends Activity {
      *  log stops mid-beat with no crash above, the process was killed, not crashed. */
     private void startHeartbeat() {
         final long t0 = System.currentTimeMillis();
-        final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
-        h.post(new Runnable() {
+        Thread th = new Thread(new Runnable() {
             @Override public void run() {
-                long s = (System.currentTimeMillis() - t0) / 1000;
-                String line = "alive t=" + s + "s pid=" + android.os.Process.myPid()
-                        + " esp=" + (espLoaded ? "on" : "off");
-                Log.i(TAG, line);
-                try { Sandbox.say(line); } catch (Throwable ignored) {}
-                h.postDelayed(this, 5000);
+                while (true) {
+                    long s = (System.currentTimeMillis() - t0) / 1000;
+                    String line = "alive t=" + s + "s pid=" + android.os.Process.myPid()
+                            + " esp=" + (espLoaded ? "on" : "off") + " " + mem();
+                    Log.i(TAG, line);
+                    try { Sandbox.say(line); } catch (Throwable ignored) {}
+                    try { Thread.sleep(3000); } catch (InterruptedException e) { return; }
+                }
             }
-        });
+        }, "oxhk-heartbeat");
+        th.setDaemon(true);
+        th.start();
+    }
+
+    /** RSS and thread count from /proc/self — enough to spot a memory blow-up before the kill. */
+    private static String mem() {
+        try {
+            java.io.BufferedReader r = new java.io.BufferedReader(new java.io.FileReader(
+                    "/proc/self/statm"));
+            String[] f = r.readLine().trim().split("\\s+");
+            r.close();
+            long pages = Long.parseLong(f[1]);
+            int threads = 0;
+            java.io.BufferedReader s = new java.io.BufferedReader(new java.io.FileReader(
+                    "/proc/self/status"));
+            String l;
+            while ((l = s.readLine()) != null) {
+                if (l.startsWith("Threads:")) {
+                    threads = Integer.parseInt(l.substring(8).trim());
+                    break;
+                }
+            }
+            s.close();
+            return "rss=" + (pages * 4 / 1024) + "MB thr=" + threads;
+        } catch (Throwable t) {
+            return "mem=?";
+        }
     }
 
     private View viewOf(Object p) throws Exception {
@@ -331,6 +359,7 @@ public final class UnityActivity extends Activity {
     }
 
     @Override public String getPackageCodePath() {
+        if (!Sandbox.SPOOF) return super.getPackageCodePath();
         try {
             return s.appInfo().sourceDir;
         } catch (Throwable t) {
@@ -339,6 +368,7 @@ public final class UnityActivity extends Activity {
     }
 
     @Override public String getPackageResourcePath() {
+        if (!Sandbox.SPOOF) return super.getPackageResourcePath();
         try {
             return s.appInfo().sourceDir;
         } catch (Throwable t) {
@@ -347,6 +377,7 @@ public final class UnityActivity extends Activity {
     }
 
     @Override public ApplicationInfo getApplicationInfo() {
+        if (!Sandbox.SPOOF) return super.getApplicationInfo();
         try {
             return s.appInfo();
         } catch (Throwable t) {
