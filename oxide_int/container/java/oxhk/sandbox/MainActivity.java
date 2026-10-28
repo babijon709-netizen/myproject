@@ -180,6 +180,7 @@ public final class MainActivity extends Activity {
         } catch (Throwable t) {
             Log.w(TAG, "native guard failed: " + t);
         }
+        appendExitReasons();
         append("all files access: " + android.os.Environment.isExternalStorageManager()
                 + "; logcat is uid-wide");
         String run = Logs.lastRun(this);
@@ -281,6 +282,53 @@ public final class MainActivity extends Activity {
         } catch (Throwable t) {
             append("FAILED: " + t);
             Log.e(TAG, "stage 1", t);
+        }
+    }
+
+    /** API 30+: why did the previous instance of this process die? This is the only place the
+     *  answer exists — a killed process leaves no trace of its own. */
+    private void appendExitReasons() {
+        if (android.os.Build.VERSION.SDK_INT < 30) {
+            append("exit reasons: need API 30+ (this is " + android.os.Build.VERSION.SDK_INT + ")");
+            return;
+        }
+        try {
+            android.app.ActivityManager am =
+                    (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            java.util.List<android.app.ApplicationExitInfo> list =
+                    am.getHistoricalProcessExitReasons(getPackageName(), 0, 8);
+            append("== previous exits (" + list.size() + ")");
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("HH:mm:ss");
+            for (android.app.ApplicationExitInfo i : list) {
+                append(f.format(new java.util.Date(i.getTimestamp()))
+                        + "  reason=" + reasonName(i.getReason())
+                        + " status=" + i.getStatus()
+                        + " imp=" + i.getImportance()
+                        + " rss=" + (i.getRss() / 1024) + "MB pss=" + (i.getPss() / 1024) + "MB"
+                        + "\n     " + i.getDescription());
+            }
+        } catch (Throwable t) {
+            append("exit reasons failed: " + t);
+        }
+    }
+
+    private static String reasonName(int r) {
+        switch (r) {
+            case android.app.ApplicationExitInfo.REASON_EXIT_SELF: return "EXIT_SELF";
+            case android.app.ApplicationExitInfo.REASON_SIGNALED: return "SIGNALED";
+            case android.app.ApplicationExitInfo.REASON_LOW_MEMORY: return "LOW_MEMORY";
+            case android.app.ApplicationExitInfo.REASON_CRASH: return "CRASH";
+            case android.app.ApplicationExitInfo.REASON_CRASH_NATIVE: return "CRASH_NATIVE";
+            case android.app.ApplicationExitInfo.REASON_ANR: return "ANR";
+            case android.app.ApplicationExitInfo.REASON_INITIALIZATION_FAILURE: return "INIT_FAIL";
+            case android.app.ApplicationExitInfo.REASON_PERMISSION_CHANGE: return "PERM_CHANGE";
+            case android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE:
+                return "EXCESSIVE_RESOURCE_USAGE";
+            case android.app.ApplicationExitInfo.REASON_USER_REQUESTED: return "USER_REQUESTED";
+            case android.app.ApplicationExitInfo.REASON_USER_STOPPED: return "USER_STOPPED";
+            case android.app.ApplicationExitInfo.REASON_DEPENDENCY_DIED: return "DEPENDENCY_DIED";
+            case android.app.ApplicationExitInfo.REASON_OTHER: return "OTHER";
+            default: return "reason#" + r;
         }
     }
 

@@ -187,6 +187,11 @@ public final class UnityActivity extends Activity {
                             + " esp=" + (espLoaded ? "on" : "off") + " " + mem();
                     Log.i(TAG, line);
                     try { Sandbox.say(line); } catch (Throwable ignored) {}
+                    // crashlytics armed its own native handlers ~5 s in and replaced ours;
+                    // put the fault recorder back so a later SIGSEGV still leaves a file
+                    try {
+                        MainActivity.nativeGuard(getFilesDir().getAbsolutePath());
+                    } catch (Throwable ignored) {}
                     try { Thread.sleep(3000); } catch (InterruptedException e) { return; }
                 }
             }
