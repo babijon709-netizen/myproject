@@ -29,7 +29,7 @@
 
 typedef int (*sigaction_t)(int, const struct sigaction*, struct sigaction*);
 typedef void* (*dlopen_t)(const char*, int);
-typedef void* (*dlopen_ext_t)(const char*, int, const struct android_dlextinfo*);
+typedef void* (*dlopen_ext_t)(const char*, int, const android_dlextinfo*);
 
 static sigaction_t   real_sigaction;
 static dlopen_t      real_dlopen;
@@ -96,7 +96,7 @@ static void* my_dlopen(const char* name, int flags) {
     return h;
 }
 
-static void* my_dlopen_ext(const char* name, int flags, const struct android_dlextinfo* info) {
+static void* my_dlopen_ext(const char* name, int flags, const android_dlextinfo* info) {
     if (!g_busy) {
         if (vulkan_wanted(name)) {
             g_denied++;
