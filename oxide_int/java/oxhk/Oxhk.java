@@ -74,6 +74,7 @@ public final class Oxhk {
         if (sInstalled) return;
         sInstalled = true;
         Log.i(TAG, "install from " + ctx.getClass().getName());
+        reportNativeCrash(ctx);
         if (ctx instanceof Activity) attach((Activity) ctx);
         Context app = ctx.getApplicationContext();
         if (app instanceof Application) {
@@ -135,6 +136,24 @@ public final class Oxhk {
             nativeSetConfig(flags, headBone, maxDist);
         } catch (Throwable ignored) {
         }
+    }
+
+    /** the native guard leaves a note when the process died inside liboxhk — surface it. */
+    private static void reportNativeCrash(Context ctx) {
+        File f = new File(ctx.getFilesDir(), "native-crash.txt");
+        if (!f.exists()) return;
+        StringBuilder sb = new StringBuilder();
+        try {
+            FileReader r = new FileReader(f);
+            char[] buf = new char[512];
+            int n;
+            while ((n = r.read(buf)) > 0) sb.append(buf, 0, n);
+            r.close();
+        } catch (Throwable t) {
+            sb.append("?").append(t);
+        }
+        Log.e(TAG, "previous native crash: " + sb.toString().trim());
+        f.delete();
     }
 
     private static File cfgFile(Context ctx) { return new File(ctx.getFilesDir(), "oxhk.json"); }

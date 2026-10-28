@@ -24,6 +24,10 @@
 #include <string>
 #include <vector>
 #include <unistd.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <ucontext.h>
+#include <sys/stat.h>
 
 #define LOG_TAG "oxhk"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -392,11 +396,85 @@ static void build_frame(std::vector<Box>& out) {
   }
 }
 
+
+// ── crash guard ─────────────────────────────────────────────────────────────────────────
+// The ESP reads game memory through offsets from a dump; one wrong offset is a SIGSEGV and no
+// Java handler can see it. So: a signal handler that records the fault, and a marker file that
+// tells the next run "the previous one died with the ESP active" — that run then starts with the
+// overlay off instead of crash-looping.
+static char g_dir[400];
+static char g_crashPath[512];
+static char g_armPath[512];
+static volatile sig_atomic_t g_ticks = 0;
+
+static void crash_signal(int sig, siginfo_t* si, void*) {
+  char buf[256];
+  int n = snprintf(buf, sizeof buf, "signal %d (%s) addr=%p code=%d ticks=%d\n",
+                   sig, strsignal(sig), si ? si->si_addr : nullptr, si ? si->si_code : 0,
+                   (int) g_ticks);
+  int fd = open(g_crashPath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+  if (fd >= 0) {
+    ssize_t ignored = write(fd, buf, (size_t) n);
+    (void) ignored;
+    close(fd);
+  }
+  // let the system do its own thing too: tombstone in logcat, process death as usual
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
+
+static void install_guard(const char* dir) {
+  snprintf(g_dir, sizeof g_dir, "%s", dir);
+  snprintf(g_crashPath, sizeof g_crashPath, "%s/native-crash.txt", dir);
+  snprintf(g_armPath, sizeof g_armPath, "%s/esp-armed", dir);
+
+#ifdef SIGSTKSZ
+  static char altstack[SIGSTKSZ * 4];
+#else
+  static char altstack[64 * 1024];
+#endif
+  stack_t ss{};
+  ss.ss_size = sizeof altstack;
+  ss.ss_sp = altstack;
+  sigaltstack(&ss, nullptr);
+
+  struct sigaction sa{};
+  sa.sa_sigaction = crash_signal;
+  sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  sigemptyset(&sa.sa_mask);
+  for (int sig : {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE}) sigaction(sig, &sa, nullptr);
+
+  // previous run died while the overlay was ticking?
+  struct stat st{};
+  if (stat(g_armPath, &st) == 0) {
+    LOGI("previous run died with the esp active — starting with the overlay disabled");
+    g_cfg.flags &= ~kFlagEsp;
+    unlink(g_armPath);
+  }
+  LOGI("guard installed: %s", g_crashPath);
+}
+
+static void arm_marker(bool on) {
+  if (on) {
+    int fd = open(g_armPath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd >= 0) close(fd);
+  } else {
+    unlink(g_armPath);
+  }
+}
+
 // ── JNI ─────────────────────────────────────────────────────────────────────────────────
 extern "C" JNIEXPORT void JNICALL
-Java_oxhk_Oxhk_nativeInit(JNIEnv*, jclass, jstring, jint w, jint h) {
+Java_oxhk_Oxhk_nativeInit(JNIEnv* env, jclass, jstring filesDir, jint w, jint h) {
   g_screenW = w > 0 ? w : g_screenW;
   g_screenH = h > 0 ? h : g_screenH;
+  if (filesDir) {
+    const char* d = env->GetStringUTFChars(filesDir, nullptr);
+    if (d) {
+      install_guard(d);
+      env->ReleaseStringUTFChars(filesDir, d);
+    }
+  }
   g_base = find_module_base("libil2cpp.so");
   LOGI("init: libil2cpp %p, screen %dx%d", (void*)g_base, g_screenW, g_screenH);
 }
@@ -415,8 +493,13 @@ Java_oxhk_Oxhk_nativeTick(JNIEnv* env, jclass, jfloatArray out, jint screenW, ji
   g_screenW = screenW > 0 ? screenW : g_screenW;
   g_screenH = screenH > 0 ? screenH : g_screenH;
 
+  // arm while the overlay is live; after ~600 frames (10 s) we trust the offsets enough
+  if (g_ticks == 0) arm_marker(true);
+  if (g_ticks < 600 && ++g_ticks == 600) arm_marker(false);
+
   static std::vector<Box> boxes;
-  build_frame(boxes);
+  if (g_cfg.flags & kFlagEsp) build_frame(boxes);
+  else boxes.clear();
 
   const jsize len = env->GetArrayLength(out);
   const int maxEnt = (len - 1) / 10;
