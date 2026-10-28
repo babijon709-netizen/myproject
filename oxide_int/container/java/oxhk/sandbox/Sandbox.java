@@ -40,7 +40,7 @@ public final class Sandbox {
     /** answer with the game's package name, or with our own — the engine derives its data paths
      *  from it (getExternalFilesDir/getExternalCacheDir are called through JNI), so this decides
      *  whether Unity writes next to our apk or into the game's external dir. */
-    public static volatile boolean SPOOF = false;
+    public static volatile boolean SPOOF = true;
 
     private static Sandbox instance;
     private static Sink log;

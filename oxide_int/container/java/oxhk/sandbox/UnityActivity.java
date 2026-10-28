@@ -59,11 +59,23 @@ public final class UnityActivity extends Activity {
         try {
             s.init();
             s.startApplication();
-            boot();
+            try {
+                boot();
+            } catch (Throwable t) {
+                // Unity refuses to construct when the package name is not an installed one, and
+                // GMS refuses everything when it is spoofed. Neither side is negotiable, so try
+                // the other mode before giving up — one of the two boots.
+                Throwable cause = root(t);
+                log("boot failed in " + (Sandbox.SPOOF ? "spoof" : "own") + " mode: " + cause);
+                Sandbox.SPOOF = !Sandbox.SPOOF;
+                log("retrying with package spoof " + (Sandbox.SPOOF ? "on" : "off"));
+                player = null;
+                boot();
+            }
         } catch (Throwable t) {
             Log.e(TAG, "boot failed", t);
             android.widget.TextView tv = new android.widget.TextView(this);
-            tv.setText("boot failed:\n\n" + t + "\n\n— trace —\n" + trace
+            tv.setText("boot failed:\n\n" + root(t) + "\n\n— trace —\n" + trace
                     + "\nsee logcat (tag oxhk.sandbox)");
             tv.setTextColor(0xFFFF6666);
             tv.setTextSize(10);
@@ -156,6 +168,13 @@ public final class UnityActivity extends Activity {
         }
         if (p instanceof View) return (View) p;
         throw new IllegalStateException("no view out of " + p.getClass().getName());
+    }
+
+    /** InvocationTargetException hides the reason; walk to the innermost throwable. */
+    private static Throwable root(Throwable t) {
+        Throwable c = t;
+        while (c.getCause() != null && c.getCause() != c) c = c.getCause();
+        return c;
     }
 
     private void log(String s) throws Exception {
