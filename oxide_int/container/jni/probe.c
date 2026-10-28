@@ -120,10 +120,11 @@ static void fault_handler(int sig, siginfo_t* si, void*) {
     if (g_inHandler) _exit(9);
     g_inHandler = 1;
     char buf[1024];
-    struct BtFrame f{{}, 0};
+    struct BtFrame f;
+    memset(&f, 0, sizeof f);
     _Unwind_Backtrace(bt_cb, &f);
     int n = snprintf(buf, sizeof buf, "SIG %d (%s) addr=%p code=%d\n", sig, strsignal(sig),
-                     si ? si->si_addr : nullptr, si ? si->si_code : 0);
+                     si ? si->si_addr : NULL, si ? si->si_code : 0);
     for (int i = 0; i < f.n && n < (int) sizeof buf - 32; ++i)
         n += snprintf(buf + n, sizeof buf - n, "  #%d %p\n", i, (void*) f.pc[i]);
     int fd = open(g_crashPath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -139,23 +140,25 @@ static void fault_handler(int sig, siginfo_t* si, void*) {
 JNIEXPORT void JNICALL
 Java_oxhk_sandbox_MainActivity_nativeGuard(JNIEnv* env, jclass, jstring jDir) {
     if (!jDir) return;
-    const char* d = (*env)->GetStringUTFChars(env, jDir, nullptr);
+    const char* d = (*env)->GetStringUTFChars(env, jDir, NULL);
     if (!d) return;
     snprintf(g_crashPath, sizeof g_crashPath, "%s/native-crash.txt", d);
     (*env)->ReleaseStringUTFChars(env, jDir, d);
 
     static char altstack[64 * 1024];
-    stack_t ss{};
+    stack_t ss;
+    memset(&ss, 0, sizeof ss);
     ss.ss_size = sizeof altstack;
     ss.ss_sp = altstack;
-    sigaltstack(&ss, nullptr);
+    sigaltstack(&ss, NULL);
 
-    struct sigaction sa{};
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = fault_handler;
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
     int sigs[] = {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE};
-    for (unsigned i = 0; i < sizeof sigs / sizeof sigs[0]; ++i) sigaction(sigs[i], &sa, nullptr);
+    for (unsigned i = 0; i < sizeof sigs / sizeof sigs[0]; ++i) sigaction(sigs[i], &sa, NULL);
     __android_log_print(ANDROID_LOG_INFO, TAG, "fault recorder armed: %s", g_crashPath);
 }
 
