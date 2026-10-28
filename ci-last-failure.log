@@ -1,0 +1,122 @@
++ set -euo pipefail
++++ dirname ./oxide_int/tools/build_container.sh
+++ cd ./oxide_int/tools/..
+++ pwd
++ HERE=/home/runner/work/myproject/myproject/oxide_int
++ OUT=/home/runner/work/myproject/myproject/oxide_int/build/sandbox
++ : /usr/local/lib/android/sdk
++ '[' -z '' ']'
++ for cand in "${ANDROID_NDK_HOME:-}" "$SDK/ndk/"*
++ '[' -n /usr/local/lib/android/sdk/ndk/30.0.16248370 ']'
++ '[' -d /usr/local/lib/android/sdk/ndk/30.0.16248370 ']'
++ NDK=/usr/local/lib/android/sdk/ndk/30.0.16248370
++ for cand in "${ANDROID_NDK_HOME:-}" "$SDK/ndk/"*
++ '[' -n /usr/local/lib/android/sdk/ndk/27.3.13750724 ']'
++ '[' -d /usr/local/lib/android/sdk/ndk/27.3.13750724 ']'
++ NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
++ for cand in "${ANDROID_NDK_HOME:-}" "$SDK/ndk/"*
++ '[' -n /usr/local/lib/android/sdk/ndk/29.0.14206865 ']'
++ '[' -d /usr/local/lib/android/sdk/ndk/29.0.14206865 ']'
++ NDK=/usr/local/lib/android/sdk/ndk/29.0.14206865
++ for cand in "${ANDROID_NDK_HOME:-}" "$SDK/ndk/"*
++ '[' -n /usr/local/lib/android/sdk/ndk/30.0.16248370 ']'
++ '[' -d /usr/local/lib/android/sdk/ndk/30.0.16248370 ']'
++ NDK=/usr/local/lib/android/sdk/ndk/30.0.16248370
++ : 26
++ : 26
+++ sort -V
+++ tail -1
+++ ls -d /usr/local/lib/android/sdk/build-tools/34.0.0 /usr/local/lib/android/sdk/build-tools/35.0.0 /usr/local/lib/android/sdk/build-tools/35.0.1 /usr/local/lib/android/sdk/build-tools/36.0.0 /usr/local/lib/android/sdk/build-tools/36.1.0 /usr/local/lib/android/sdk/build-tools/37.0.0
++ : /usr/local/lib/android/sdk/build-tools/37.0.0
+++ sort -V
+++ tail -1
+++ ls -d /usr/local/lib/android/sdk/platforms/android-34-ext10/android.jar /usr/local/lib/android/sdk/platforms/android-34-ext11/android.jar /usr/local/lib/android/sdk/platforms/android-34-ext12/android.jar /usr/local/lib/android/sdk/platforms/android-34-ext8/android.jar /usr/local/lib/android/sdk/platforms/android-34/android.jar /usr/local/lib/android/sdk/platforms/android-35-ext14/android.jar /usr/local/lib/android/sdk/platforms/android-35-ext15/android.jar /usr/local/lib/android/sdk/platforms/android-35/android.jar /usr/local/lib/android/sdk/platforms/android-36-ext18/android.jar /usr/local/lib/android/sdk/platforms/android-36-ext19/android.jar /usr/local/lib/android/sdk/platforms/android-36.1/android.jar /usr/local/lib/android/sdk/platforms/android-36/android.jar /usr/local/lib/android/sdk/platforms/android-37.0/android.jar /usr/local/lib/android/sdk/platforms/android-37.1/android.jar /usr/local/lib/android/sdk/platforms/android-37.2-beta1/android.jar /usr/local/lib/android/sdk/platforms/android-37.2-beta2/android.jar /usr/local/lib/android/sdk/platforms/android-37.2-beta3/android.jar /usr/local/lib/android/sdk/platforms/android-37.2/android.jar
++ : /usr/local/lib/android/sdk/platforms/android-37.2/android.jar
++ : /home/runner/work/myproject/myproject/oxide_int/build/injector/oxhk.p12
++ : oxhkpass
++ : oxhk
++ '[' -n /usr/local/lib/android/sdk ']'
++ '[' -n /usr/local/lib/android/sdk/ndk/30.0.16248370 ']'
++ '[' -n /usr/local/lib/android/sdk/build-tools/37.0.0 ']'
++ CC=/usr/local/lib/android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
++ rm -rf /home/runner/work/myproject/myproject/oxide_int/build/sandbox
++ mkdir -p /home/runner/work/myproject/myproject/oxide_int/build/sandbox/jni /home/runner/work/myproject/myproject/oxide_int/build/sandbox/javac /home/runner/work/myproject/myproject/oxide_int/build/sandbox/dex /home/runner/work/myproject/myproject/oxide_int/build/sandbox/apk /home/runner/work/myproject/myproject/oxide_int/build/sandbox/lib/arm64-v8a
++ echo '== native probe'
+== native probe
++ /usr/local/lib/android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang -shared -fPIC -O2 -fvisibility=hidden -Wl,-soname,libprobe.so -o /home/runner/work/myproject/myproject/oxide_int/build/sandbox/lib/arm64-v8a/libprobe.so /home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c -ldl -llog
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: warning: declaration of 'struct dl_phdr_info' will not be visible outside of this function [-Wvisibility]
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:53: warning: omitting the parameter name in a function definition is a C23 extension [-Wc23-extensions]
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                                                     ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:118:14: error: incomplete definition of type 'struct dl_phdr_info'
+  118 |     if (!info->dlpi_name || !info->dlpi_name[0]) return 0;
+      |          ~~~~^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: note: forward declaration of 'struct dl_phdr_info'
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:118:34: error: incomplete definition of type 'struct dl_phdr_info'
+  118 |     if (!info->dlpi_name || !info->dlpi_name[0]) return 0;
+      |                              ~~~~^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: note: forward declaration of 'struct dl_phdr_info'
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:122:29: error: incomplete definition of type 'struct dl_phdr_info'
+  122 |     for (int i = 0; i < info->dlpi_phnum; ++i) {
+      |                         ~~~~^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: note: forward declaration of 'struct dl_phdr_info'
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:123:17: error: incomplete definition of type 'struct dl_phdr_info'
+  123 |         if (info->dlpi_phdr[i].p_type != PT_LOAD) continue;
+      |             ~~~~^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: note: forward declaration of 'struct dl_phdr_info'
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:123:42: error: use of undeclared identifier 'PT_LOAD'
+  123 |         if (info->dlpi_phdr[i].p_type != PT_LOAD) continue;
+      |                                          ^~~~~~~
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:124:27: error: incomplete definition of type 'struct dl_phdr_info'
+  124 |         uintptr_t a = info->dlpi_addr + info->dlpi_phdr[i].p_vaddr;
+      |                       ~~~~^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: note: forward declaration of 'struct dl_phdr_info'
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:124:45: error: incomplete definition of type 'struct dl_phdr_info'
+  124 |         uintptr_t a = info->dlpi_addr + info->dlpi_phdr[i].p_vaddr;
+      |                                         ~~~~^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: note: forward declaration of 'struct dl_phdr_info'
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:126:31: error: incomplete definition of type 'struct dl_phdr_info'
+  126 |         uintptr_t e = a + info->dlpi_phdr[i].p_memsz;
+      |                           ~~~~^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: note: forward declaration of 'struct dl_phdr_info'
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:132:36: error: incomplete definition of type 'struct dl_phdr_info'
+  132 |     const char* base = strrchr(info->dlpi_name, '/');
+      |                                ~~~~^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: note: forward declaration of 'struct dl_phdr_info'
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:133:34: error: incomplete definition of type 'struct dl_phdr_info'
+  133 |     base = base ? base + 1 : info->dlpi_name;
+      |                              ~~~~^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:116:27: note: forward declaration of 'struct dl_phdr_info'
+  116 | static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+      |                           ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:142:5: error: call to undeclared function 'dl_iterate_phdr'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  142 |     dl_iterate_phdr(phdr_cb, NULL);
+      |     ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:163:56: warning: omitting the parameter name in a function definition is a C23 extension [-Wc23-extensions]
+  163 | static void fault_handler(int sig, siginfo_t* si, void*) {
+      |                                                        ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:186:63: warning: omitting the parameter name in a function definition is a C23 extension [-Wc23-extensions]
+  186 | Java_oxhk_sandbox_MainActivity_nativeGuard(JNIEnv* env, jclass, jstring jDir) {
+      |                                                               ^
+/home/runner/work/myproject/myproject/oxide_int/container/jni/probe.c:257:51: warning: passing 'char *' to parameter of type 'jbyte *' (aka 'signed char *') converts between pointers to integer types where one is of the unique plain 'char' type and the other is not [-Wpointer-sign]
+  257 |     (*env)->ReleaseByteArrayElements(env, jBytes, bytes, JNI_ABORT);
+      |                                                   ^~~~~
+5 warnings and 11 errors generated.
