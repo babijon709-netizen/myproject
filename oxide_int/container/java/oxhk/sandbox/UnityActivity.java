@@ -47,6 +47,7 @@ public final class UnityActivity extends Activity {
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
+        Logs.installCrashHandler(this);
         Sandbox.setLog(new Sandbox.Sink() {
             @Override public void line(String l) { trace.append(l).append('\n'); }
         });
@@ -80,8 +81,8 @@ public final class UnityActivity extends Activity {
         log("libs=" + getApplicationInfo().nativeLibraryDir);
         log("codePath=" + getPackageCodePath());
         try {
-            android.net.ConnectivityManager cm =
-                    (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            android.net.ConnectivityManager cm = (android.net.ConnectivityManager)
+                    s.host().getSystemService(CONNECTIVITY_SERVICE);
             android.net.Network n = cm.getActiveNetwork();
             log("network=" + n + " caps="
                     + (n == null ? "-" : cm.getNetworkCapabilities(n)));

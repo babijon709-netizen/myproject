@@ -91,6 +91,15 @@ public final class Logs {
         final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
             @Override public void uncaughtException(Thread t, Throwable e) {
+                // The game runs with a spoofed package name, so GMS/Firebase — which validate the
+                // real caller uid against the package — throw SecurityException on their own
+                // threads and Handler.dispatchMessage turns that into a process death.
+                // Their failure is not ours to fix: log it and keep the process alive.
+                if (foreign(t, e)) {
+                    Log.w(TAG, "swallowed " + t.getName() + ": " + e
+                            + " (gms identity mismatch)");
+                    return;
+                }
                 try {
                     StringBuilder sb = new StringBuilder();
                     sb.append(t.getName()).append(' ').append(e).append('\n');
@@ -113,6 +122,32 @@ public final class Logs {
                 if (prev != null) prev.uncaughtException(t, e);
             }
         });
+    }
+
+    /** is this exception only a consequence of our package spoof? */
+    private static boolean foreign(Thread t, Throwable e) {
+        String msg = String.valueOf(e.getMessage());
+        if (msg.contains("Unknown calling package name")
+                || msg.contains("does not belong to")
+                || msg.contains("cannot schedule job in")) {
+            return true;
+        }
+        Throwable c = e;
+        int depth = 0;
+        while (c != null && depth++ < 6) {
+            for (StackTraceElement el : c.getStackTrace()) {
+                String cl = el.getClassName();
+                if (cl.startsWith("com.google.android.gms")
+                        || cl.startsWith("com.google.firebase")
+                        || cl.startsWith("com.google.android.play.core")) {
+                    return true;
+                }
+            }
+            c = c.getCause();
+        }
+        String name = t.getName();
+        return name.startsWith("Measurement") || name.startsWith("Firebase")
+                || name.startsWith("GoogleApiHandler");
     }
 
     public static String lastCrash(Context c) {

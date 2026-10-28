@@ -276,6 +276,10 @@ public final class Sandbox {
 
     // ── helpers ────────────────────────────────────────────────────────────────────────────
 
+    /** the real host context: system services must be asked through it, otherwise the
+     *  framework attributes the call to a package we do not own. */
+    public Context host() { return host; }
+
     public ClassLoader loader() throws Exception { init(); return loader; }
     public Resources resources() throws Exception { init(); return res; }
     public AssetManager assets() throws Exception { init(); return am; }
