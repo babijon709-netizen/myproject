@@ -259,6 +259,11 @@ Java_oxhk_sandbox_MainActivity_nativeGuard(JNIEnv* env, jclass, jstring jDir, jb
                         jBlockVk ? ", force gles" : "");
 }
 
+JNIEXPORT jint JNICALL
+Java_oxhk_sandbox_MainActivity_nativeInterceptOk(JNIEnv* env, jclass cls) {
+    return oxhk_intercept_ok();
+}
+
 JNIEXPORT jstring JNICALL
 Java_oxhk_sandbox_MainActivity_nativeProbe(JNIEnv *env, jclass cls, jstring jGameLib,
                                            jstring jCopy, jbyteArray jBytes) {

@@ -187,11 +187,15 @@ public final class UnityActivity extends Activity {
                             + " esp=" + (espLoaded ? "on" : "off") + " " + mem();
                     Log.i(TAG, line);
                     try { Sandbox.say(line); } catch (Throwable ignored) {}
+                    long nap = 3000;
                     try {
                         MainActivity.nativeGuard(getFilesDir().getAbsolutePath(),
                                 pref("force_gles", true));
-                    } catch (Throwable ignored) {}
-                    try { Thread.sleep(3000); } catch (InterruptedException e) { return; }
+                        // если intercept.c не взял sigaction (старый rom, отказ добби), остаётся
+                        // старая гонка — тогда переустанавливаем часто
+                        if (MainActivity.nativeInterceptOk() != 1) nap = 500;
+                    } catch (Throwable ignored) { nap = 500; }
+                    try { Thread.sleep(nap); } catch (InterruptedException e) { return; }
                 }
             }
         }, "oxhk-heartbeat");

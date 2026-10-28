@@ -49,6 +49,8 @@ public final class MainActivity extends Activity {
 
     private static native String nativeProbe(String gameLib, String copy, byte[] libBytes);
     static native void nativeGuard(String filesDir, boolean blockVulkan);
+    /** 1, если intercept.c реально перехватил sigaction — тогда переустанавливать незачем. */
+    static native int nativeInterceptOk();
 
     private static android.content.SharedPreferences prefs;
 

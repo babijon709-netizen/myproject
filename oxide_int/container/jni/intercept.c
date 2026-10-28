@@ -132,10 +132,12 @@ void oxhk_intercept_arm(const struct sigaction* sa, int block_vulkan) {
     if (sym) {
         rc_sa = DobbyHook(sym, (void*) my_sigaction, (void**) &real_sigaction);
     }
-    if (dl) {
+    // dlopen-хуки ставим только когда эксперимент включён: выключенная галочка = ровно тот же
+    // процесс, что и до intercept.c, то есть честное A/B одним apk, а не «почти».
+    if (g_block_vulkan && dl) {
         rc_dl = DobbyHook(dl, (void*) my_dlopen, (void**) &real_dlopen);
     }
-    if (dlext) {
+    if (g_block_vulkan && dlext) {
         rc_ext = DobbyHook(dlext, (void*) my_dlopen_ext, (void**) &real_dlopen_ext);
     }
     g_installed = 1;
