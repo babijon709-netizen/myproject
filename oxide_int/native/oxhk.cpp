@@ -326,6 +326,19 @@ static void build_frame(std::vector<Box>& out) {
                           camera_matrix(il2::Camera_worldToCameraMatrix, cam));
 
   auto players = player_list();
+
+  // throttled telemetry: without adb this log is the only way to tell "no match yet" from
+  // "wrong offsets" — it says how many PlayerManager instances the list holds and whether the
+  // camera/il2cpp base resolved.
+  static uint64_t lastLog = 0;
+  const uint64_t now = static_cast<uint64_t>(time(nullptr));
+  if (now != lastLog) {
+    lastLog = now;
+    void* sf = g_klass_pm ? static_fields(g_klass_pm) : nullptr;
+    void* list = sf ? rd<void*>((uintptr_t)sf + off::pm_static_client) : nullptr;
+    LOGI("esp: players=%zu camera=%p list=%p sf=%p", players.size(), cam, list, sf);
+  }
+
   if (players.empty()) return;
 
   void* local = nullptr;
