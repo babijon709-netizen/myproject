@@ -16,6 +16,8 @@
 #include <android/dlext.h>
 #include <android/log.h>
 #include <dlfcn.h>
+#include <link.h>   /* struct dl_phdr_info */
+#include <elf.h>    /* PT_LOAD */
 #include <errno.h>
 #include <fcntl.h>
 #include <stdarg.h>
