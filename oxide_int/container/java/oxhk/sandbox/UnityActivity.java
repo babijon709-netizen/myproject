@@ -188,7 +188,8 @@ public final class UnityActivity extends Activity {
                     Log.i(TAG, line);
                     try { Sandbox.say(line); } catch (Throwable ignored) {}
                     try {
-                        MainActivity.nativeGuard(getFilesDir().getAbsolutePath());
+                        MainActivity.nativeGuard(getFilesDir().getAbsolutePath(),
+                                pref("force_gles", true));
                     } catch (Throwable ignored) {}
                     try { Thread.sleep(3000); } catch (InterruptedException e) { return; }
                 }
@@ -197,23 +198,61 @@ public final class UnityActivity extends Activity {
         th.setDaemon(true);
         th.start();
 
-        // crashlytics installs its own native handlers a few seconds in and replaces ours;
-        // whoever installs last wins, so keep putting the recorder back
-        Thread guard = new Thread(new Runnable() {
-            @Override public void run() {
-                while (true) {
-                    try {
-                        MainActivity.nativeGuard(getFilesDir().getAbsolutePath());
-                        Thread.sleep(500);
-                    } catch (InterruptedException e) {
-                        return;
-                    } catch (Throwable ignored) {
-                    }
-                }
+        // раньше здесь крутилась переустановка обработчиков каждые 500 мс — гонка с
+        // Crashlytics, которую можно проиграть ровно в момент падения. Теперь sigaction
+        // перехвачен в intercept.c, и переустанавливать нечего.
+    }
+
+    /** Куда уходит RSS: топ-4 маппинга по сумме килобайт. Видно, растёт ли анонимная куча
+     *  (il2cpp metadata) или файловые маппинги сплитов, — это и есть ответ на "1.1 ГБ". */
+    private static String bigMaps() {
+        java.util.HashMap<String, Long> agg = new java.util.HashMap<String, Long>();
+        java.io.BufferedReader r = null;
+        try {
+            r = new java.io.BufferedReader(new java.io.FileReader("/proc/self/maps"), 1 << 14);
+            String l;
+            while ((l = r.readLine()) != null) {
+                int sp = l.indexOf(' ');
+                if (sp < 0) continue;
+                String range = l.substring(0, sp);
+                int dash = range.indexOf('-');
+                if (dash < 0) continue;
+                long lo = Long.parseLong(range.substring(0, dash), 16);
+                long hi = Long.parseLong(range.substring(dash + 1), 16);
+                int sp2 = l.indexOf(' ', sp + 1);
+                String perms = sp2 > 0 ? l.substring(sp + 1, sp2) : "?";
+                String path = "";
+                int sl = l.lastIndexOf('/');
+                if (sl > 0) path = l.substring(sl + 1);
+                else if (l.contains("[anon:") || l.contains("[stack")) path = l.substring(l.indexOf('[') + 1,
+                        Math.max(l.indexOf('[') + 1, l.length()));
+                String key = path.isEmpty() ? ("anon " + perms) : path;
+                Long prev = agg.get(key);
+                agg.put(key, (prev == null ? 0L : prev) + (hi - lo) / 1024);
             }
-        }, "oxhk-guard");
-        guard.setDaemon(true);
-        guard.start();
+        } catch (Throwable t) {
+            return "big=?";
+        } finally {
+            try { if (r != null) r.close(); } catch (Throwable ignored) {}
+        }
+        java.util.List<java.util.Map.Entry<String, Long>> es =
+                new java.util.ArrayList<java.util.Map.Entry<String, Long>>(agg.entrySet());
+        java.util.Collections.sort(es, new java.util.Comparator<java.util.Map.Entry<String, Long>>() {
+            @Override public int compare(java.util.Map.Entry<String, Long> a,
+                                        java.util.Map.Entry<String, Long> b) {
+                return b.getValue().compareTo(a.getValue());
+            }
+        });
+        StringBuilder sb = new StringBuilder("big=");
+        for (int i = 0; i < es.size() && i < 4; ++i) {
+            if (i > 0) sb.append(',');
+            sb.append(es.get(i).getKey()).append(':').append(es.get(i).getValue() / 1024).append("MB");
+        }
+        return sb.toString();
+    }
+
+    private boolean pref(String key, boolean def) {
+        return host.getSharedPreferences("oxhk", 0).getBoolean(key, def);
     }
 
     /** RSS and thread count from /proc/self — enough to spot a memory blow-up before the kill. */
@@ -235,7 +274,7 @@ public final class UnityActivity extends Activity {
                 }
             }
             s.close();
-            return "rss=" + (pages * 4 / 1024) + "MB thr=" + threads;
+            return "rss=" + (pages * 4 / 1024) + "MB thr=" + threads + " " + bigMaps();
         } catch (Throwable t) {
             return "mem=?";
         }

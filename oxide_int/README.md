@@ -463,3 +463,59 @@ network and its capabilities at boot.
 The sandbox apk also ships the ESP now: `liboxhk.so` + `oxhk.Oxhk` are compiled into it, and
 `UnityActivity` calls `oxhk.Oxhk.install(this)` right after the engine view is created — the
 overlay is a plain `addView` into a window we own, with no hooks anywhere.
+
+### чужой нон-рут чита (`@dearvision.zip`) — что там и что взяли (2026-10-28)
+
+Пользователь залил в `main` архив `@dearvision.zip`. Внутри — **не загрузчик и не установщик**, а
+нативная мод-библиотека `libDear.so` для уже вскрытого apk: старый ADT-проект
+`NonRootLoader/NonRootLoader`, `applicationId com.android.support`, manifest с `MainActivity` и
+сервисом `Menu`, и Java **только в виде `classes.dex` (6 КБ: `R` + ADRT)** — ни активити, ни
+загрузчика там нет. Значит, схема у автора — репак/инжект: библиотека попадает в процесс игры и
+целиком на ней и живёт (`__attribute__((constructor))` + `JNI_OnLoad`).
+
+Как он работает:
+
+* `hack_thread`: ждёт `dlopen("libEGL.so")`, вешает `DobbyHook` на `dlopen` и **отбивает
+  `libvulkan.so`** (то есть принудительный GLES), ждёт `libil2cpp.so`, затем берёт функции по
+  `getAbsoluteAddress("libil2cpp.so", RVA)` и хукает `PlayerManager.Update` / `OnDisable`;
+* `Il2CppAttach` — свой `dlopen_ex`/`dlsym_ex` + таблица `il2cpp_*` по именам (ByNameModding);
+* `Il2Cpp/il2cpp_dump.cpp` — форк Il2CppDumper'а (Perfare), требует экспортов `il2cpp_domain_get`
+  и т.п.;
+* отрисовка — ImGui + перехват `eglSwapBuffers` (47k строк только на ImGui), тач — `imgui_touch`;
+* инструментарий: `xdl` (свой линкер/lzma), `KittyMemory` (MemoryPatch/Backup/Scanner),
+  `And64InlineHook`, `oxorany` (обфускация строк), `libdobby.a`.
+
+Что из этого нам подходит, а что нет:
+
+| кусок | берём? | почему |
+|---|---|---|
+| `libdobby.a` + `dobby.h` | **да** | единственное, чего у нас не было: inline-хуки. Лежит в `vendor/dobby` |
+| блокировка `libvulkan` | **да, как эксперимент** | см. ниже |
+| `il2cpp_*` по именам (BNM) | нет | в нашем `libil2cpp.so` **ноль экспортов** (`dynsym` пуст по `il2cpp_*`), поэтому всё и так на RVA из дампа |
+| ImGui + `eglSwapBuffers` | нет | у нас оверлей — обычный `View` в своём окне: без GL-хука, без лишних 47k строк и заметнее не становится |
+| `KittyMemory` patch/backup | нет | мы ничего не пишем в код игры — это и есть наша скрытность |
+| `xdl` | нет | `dl_iterate_phdr` в `probe.c` уже даёт базу и карту модулей |
+
+Итог по коду: `container/jni/intercept.c` — два хука через dobby, которые закрывают реальные дыры
+контейнера:
+
+1. **`sigaction` gate.** Crashlytics игры ставит свои обработчики сигналов поверх наших через
+   несколько секунд после старта, поэтому `native-crash.txt` оставался пустым (раньше это лечили
+   переустановкой каждые 500 мс — гонка, которую проигрываешь ровно в момент падения). Теперь
+   `sigaction` перехвачен: попытка занять `SIGSEGV` логируется (`takeover blocked`) и заменяется
+   нашим рекордером.
+2. **`dlopen` gate.** Галочка `force GLES` (по умолчанию включена) не пускает `libvulkan.so`, как
+   у deavision, плюс пишет в лог все `libil2cpp/libunity/libloader/lib_burst/...`, которые
+   входят в процесс. Проверяемая гипотеза: Unity 6000 в чужом процессе поднимает Vulkan-устройство
+   на нашей Surface и падает на инициализации сцены (`SIGSEGV` через ~13 с после старта, без
+   строки `Fatal signal` в нашем uid-логе).
+
+Диагностика, добавленная к тому же прогону:
+
+* `big=...` в каждой строке heartbeat — топ-4 маппинга по сумме: видно, растёт ли анонимная куча
+  (il2cpp metadata) или файловые маппинги сплитов. Это ответ на «1.1 ГБ RSS»;
+* `fault_handler` теперь пишет `pc` (+ модуль и смещение), строку `maps` для `pc` и для
+  `si_addr`, и первый кадр до `_Unwind_Backtrace` — чтобы `#0` был местом падения, а не
+  обработчиком;
+* `== crash buffer (debuggerd)` в главном экране: `logcat -b crash` **без** фильтра по uid, потому
+  что `Fatal signal 11 …` пишет не наш процесс, и uid-фильтр его режет.

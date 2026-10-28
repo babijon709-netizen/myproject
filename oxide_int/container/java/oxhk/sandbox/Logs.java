@@ -30,6 +30,19 @@ public final class Logs {
         return out;
     }
 
+
+    /** crash-буфер БЕЗ фильтра по uid: только там debuggerd пишет "Fatal signal 11 … fault addr"
+     *  и первые кадры tombstone. Наш uid-фильтр эти строки режет, потому что пишет их не мы. */
+    public static String crashBuffer() {
+        String out = exec(new String[]{"/system/bin/logcat", "-d", "-v", "time", "-b", "crash",
+                "-t", "300"});
+        if (out.length() < 40) {
+            out = exec(new String[]{"/system/bin/logcat", "-d", "-v", "time", "-b", "all",
+                    "-t", "300"});
+        }
+        return out.contains("beginning of") && out.length() < 200 ? "" : out;
+    }
+
     private static String exec(String[] cmd) {
         StringBuilder sb = new StringBuilder();
         java.lang.Process p = null;

@@ -28,6 +28,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <unwind.h>
+#include <ucontext.h>
 
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 1
@@ -162,9 +163,40 @@ static int fmt_frame(char* dst, int cap, int idx, uintptr_t pc) {
     return snprintf(dst, cap, "  #%d 0x%lx ?\n", idx, (unsigned long) pc);
 }
 
-static void fault_handler(int sig, siginfo_t* si, void*) {
+// одна строка из /proc/self/maps, в которой лежит addr. Без fopen/malloc: обработчик сигнала
+// может прилететь поверх упавшего malloc, и тогда любой libc-путь с локом = тишина вместо трейса.
+static int maps_line(uintptr_t addr, char* dst, int cap) {
+    int fd = open("/proc/self/maps", O_RDONLY);
+    if (fd < 0) return 0;
+    static char buf[16384];
+    ssize_t got = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (got <= 0) return 0;
+    buf[got] = 0;
+    char* line = buf;
+    while (line && *line) {
+        char* nl = strchr(line, '\n');
+        if (nl) *nl = 0;
+        unsigned long lo = 0, hi = 0;
+        if (sscanf(line, "%lx-%lx", &lo, &hi) == 2 && addr >= lo && addr < hi) {
+            int n = snprintf(dst, cap, "%s", line);
+            return n > 0 ? n : 0;
+        }
+        line = nl ? nl + 1 : NULL;
+    }
+    return 0;
+}
+
+static void fault_handler(int sig, siginfo_t* si, void* ucv) {
     if (g_inHandler) _exit(9);
     g_inHandler = 1;
+    uintptr_t pc = 0;
+    ucontext_t* uc = (ucontext_t*) ucv;
+#if defined(__aarch64__)
+    if (uc) pc = (uintptr_t) uc->uc_mcontext.pc;
+#elif defined(__arm__)
+    if (uc) pc = (uintptr_t) uc->uc_mcontext.arm_pc;
+#endif
     char buf[2048];
     struct BtFrame f;
     memset(&f, 0, sizeof f);
@@ -172,6 +204,13 @@ static void fault_handler(int sig, siginfo_t* si, void*) {
     int n = snprintf(buf, sizeof buf, "SIG %d (%s) addr=0x%lx code=%d libs=%d\n", sig,
                      strsignal(sig), (unsigned long) (si ? (uintptr_t) si->si_addr : 0),
                      si ? si->si_code : 0, g_nlibs);
+    if (pc && n < (int) sizeof buf - 200) n += fmt_frame(buf + n, (int) sizeof buf - n, -1, pc);
+    if (n < (int) sizeof buf - 400) {
+        char m[300];
+        if (maps_line(pc, m, sizeof m)) n += snprintf(buf + n, sizeof buf - n, "  pc map: %s\n", m);
+        if (si && maps_line((uintptr_t) si->si_addr, m, sizeof m))
+            n += snprintf(buf + n, sizeof buf - n, "  addr map: %s\n", m);
+    }
     for (int i = 0; i < f.n && n < (int) sizeof buf - 80; ++i)
         n += fmt_frame(buf + n, (int) sizeof buf - n, i, f.pc[i]);
     int fd = open(g_crashPath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
@@ -184,8 +223,12 @@ static void fault_handler(int sig, siginfo_t* si, void*) {
     raise(sig);
 }
 
+// intercept.c: sigaction gate + dlopen gate (dobby). Returns 1 when the hooks took.
+extern void oxhk_intercept_arm(const struct sigaction* sa, int block_vulkan);
+extern int oxhk_intercept_ok(void);
+
 JNIEXPORT void JNICALL
-Java_oxhk_sandbox_MainActivity_nativeGuard(JNIEnv* env, jclass, jstring jDir) {
+Java_oxhk_sandbox_MainActivity_nativeGuard(JNIEnv* env, jclass, jstring jDir, jboolean jBlockVk) {
     if (!jDir) return;
     const char* d = (*env)->GetStringUTFChars(env, jDir, NULL);
     if (!d) return;
@@ -207,7 +250,13 @@ Java_oxhk_sandbox_MainActivity_nativeGuard(JNIEnv* env, jclass, jstring jDir) {
     refresh_libs();
     int sigs[] = {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE};
     for (unsigned i = 0; i < sizeof sigs / sizeof sigs[0]; ++i) sigaction(sigs[i], &sa, NULL);
-    __android_log_print(ANDROID_LOG_INFO, TAG, "fault recorder armed: %s", g_crashPath);
+
+    // теперь никто не должен снять эти обработчики: sigaction перехвачен через dobby
+    oxhk_intercept_arm(&sa, jBlockVk ? 1 : 0);
+
+    __android_log_print(ANDROID_LOG_INFO, TAG, "fault recorder armed: %s (intercept=%d%s)",
+                        g_crashPath, oxhk_intercept_ok(),
+                        jBlockVk ? ", force gles" : "");
 }
 
 JNIEXPORT jstring JNICALL
@@ -256,7 +305,7 @@ Java_oxhk_sandbox_MainActivity_nativeProbe(JNIEnv *env, jclass cls, jstring jGam
         }
         close(fd);
     }
-    (*env)->ReleaseByteArrayElements(env, jBytes, bytes, JNI_ABORT);
+    (*env)->ReleaseByteArrayElements(env, jBytes, (jbyte*) bytes, JNI_ABORT);
 
     step_maps(out, sizeof out);
 

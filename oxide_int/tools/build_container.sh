@@ -30,9 +30,27 @@ fi
 CC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$API-clang"
 rm -rf "$OUT" && mkdir -p "$OUT"/{jni,javac,dex,apk,lib/arm64-v8a}
 
-echo "== native probe"
-"$CC" -shared -fPIC -O2 -fvisibility=hidden -Wl,-soname,libprobe.so \
-      -o "$OUT/lib/arm64-v8a/libprobe.so" "$HERE/container/jni/probe.c" -ldl -llog
+echo "== native probe (+ intercept.c + vendored dobby)"
+# probe.c и intercept.c — это C, поэтому компилируем их clang'ом, а линкуем clang++: libdobby.a
+# собрана под C++ (_Znwm, __cxa_*, std::logic_error), ей нужен -static-libstdc++.
+DOBBY="$HERE/vendor/dobby"
+CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$API-clang++"
+NM="$(dirname "$CC")/llvm-nm"
+"$CC" -c -fPIC -O2 -fvisibility=hidden -I "$DOBBY" \
+      -o "$OUT/jni/probe.o" "$HERE/container/jni/probe.c"
+"$CC" -c -fPIC -O2 -fvisibility=hidden -I "$DOBBY" \
+      -o "$OUT/jni/intercept.o" "$HERE/container/jni/intercept.c"
+"$CXX" -shared -Wl,-soname,libprobe.so -Wl,--no-undefined -static-libstdc++ \
+      -o "$OUT/lib/arm64-v8a/libprobe.so" \
+      "$OUT/jni/probe.o" "$OUT/jni/intercept.o" \
+      "$DOBBY/arm64-v8a/libdobby.a" -ldl -llog -lm
+
+# dobby обязан был прилинковаться: без него intercept молча ничего не перехватит
+"$NM" -D --defined-only "$OUT/lib/arm64-v8a/libprobe.so" | grep -q nativeGuard || {
+  echo "libprobe.so: JNI symbols hidden — проверь JNIEXPORT/визибилити"; exit 1; }
+"$NM" "$OUT/lib/arm64-v8a/libprobe.so" | grep -q " T DobbyHook" || {
+  echo "libprobe.so: DobbyHook не прилинкован"; exit 1; }
+echo "   libprobe.so $(stat -c %s "$OUT/lib/arm64-v8a/libprobe.so") bytes, dobby ok"
 
 echo "== native esp payload"
 CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$API-clang++"

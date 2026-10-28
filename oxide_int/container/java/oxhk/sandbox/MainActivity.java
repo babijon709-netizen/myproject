@@ -48,15 +48,19 @@ public final class MainActivity extends Activity {
     }
 
     private static native String nativeProbe(String gameLib, String copy, byte[] libBytes);
-    static native void nativeGuard(String filesDir);
+    static native void nativeGuard(String filesDir, boolean blockVulkan);
+
+    private static android.content.SharedPreferences prefs;
 
     private TextView log;
     private Button run;
     private android.widget.CheckBox spoof;
     private android.widget.CheckBox esp;
+    private android.widget.CheckBox gles;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
+        prefs = getSharedPreferences("oxhk", 0);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -106,6 +110,21 @@ public final class MainActivity extends Activity {
             }
         });
         root.addView(esp, lp());
+
+        // эксперимент из deavision: движок на Vulkan в чужом процессе падает после инициализации
+        // сцены, поэтому пробуем принудительно GLES — dobby не пускает libvulkan.so
+        gles = new android.widget.CheckBox(this);
+        gles.setText("force GLES (block libvulkan)");
+        gles.setChecked(getSharedPreferences("oxhk", 0).getBoolean("force_gles", true));
+        gles.setTextColor(0xFFD6D6D6);
+        gles.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        gles.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                getSharedPreferences("oxhk", 0).edit().putBoolean("force_gles", on).commit();
+                append("force gles: " + on);
+            }
+        });
+        root.addView(gles, lp());
 
         spoof = new android.widget.CheckBox(this);
         spoof.setText("spoof game package name (game identity)");
@@ -176,7 +195,7 @@ public final class MainActivity extends Activity {
         setContentView(root);
         Logs.installCrashHandler(this);
         try {
-            nativeGuard(getFilesDir().getAbsolutePath());
+            nativeGuard(getFilesDir().getAbsolutePath(), forceGles());
         } catch (Throwable t) {
             Log.w(TAG, "native guard failed: " + t);
         }
@@ -205,6 +224,12 @@ public final class MainActivity extends Activity {
             nf.delete();
         }
 
+        String cb = Logs.crashBuffer();
+        if (cb.length() > 0) {
+            append("== crash buffer (debuggerd)");
+            append(cb);
+        }
+
         String crash = Logs.lastCrash(this);
         if (crash.length() > 0) {
             append("== last crash (previous run)");
@@ -215,6 +240,10 @@ public final class MainActivity extends Activity {
             @Override public void line(final String s) { append(s); }
         });
         append("probe = measurements, 1/2 = the container itself");
+    }
+
+    static boolean forceGles() {
+        return MainActivity.prefs == null || MainActivity.prefs.getBoolean("force_gles", true);
     }
 
     private LinearLayout.LayoutParams lp() {
