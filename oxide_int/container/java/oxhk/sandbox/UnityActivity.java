@@ -44,10 +44,13 @@ public final class UnityActivity extends Activity {
     private Object lifecycle;       // IUnityPlayerLifecycleEvents proxy
     private FrameLayout root;       // engine view + our overlay on top
     private final StringBuilder trace = new StringBuilder();
+    private boolean espLoaded;
+    private Context host;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
         Logs.installCrashHandler(this);
+        host = this;
         Sandbox.setLog(new Sandbox.Sink() {
             @Override public void line(String l) { trace.append(l).append('\n'); }
         });
@@ -154,16 +157,39 @@ public final class UnityActivity extends Activity {
         root.addView(view, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         root.setKeepScreenOn(true);
+        startHeartbeat();
         log("engine view: " + view.getClass().getName() + " — waiting for il2cpp");
 
         // the ESP: same payload as the injected build, but nothing to hook — the overlay is a
         // View in a window we own, and liboxhk.so ships inside this apk.
-        try {
-            oxhk.Oxhk.install(this);
-            log("oxhk overlay installed");
-        } catch (Throwable t) {
-            log("oxhk overlay failed: " + t);
+        if (host.getSharedPreferences("oxhk", 0).getBoolean("load_esp", false)) {
+            try {
+                oxhk.Oxhk.install(this);
+                espLoaded = true;
+                log("oxhk overlay installed");
+            } catch (Throwable t) {
+                log("oxhk overlay failed: " + t);
+            }
+        } else {
+            log("esp disabled — liboxhk not loaded (tick the box on the main screen to enable)");
         }
+    }
+
+    /** a SIGKILL from inside the packer (it has kill/tgkill thunks) leaves no tombstone: if the
+     *  log stops mid-beat with no crash above, the process was killed, not crashed. */
+    private void startHeartbeat() {
+        final long t0 = System.currentTimeMillis();
+        final android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+        h.post(new Runnable() {
+            @Override public void run() {
+                long s = (System.currentTimeMillis() - t0) / 1000;
+                String line = "alive t=" + s + "s pid=" + android.os.Process.myPid()
+                        + " esp=" + (espLoaded ? "on" : "off");
+                Log.i(TAG, line);
+                try { Sandbox.say(line); } catch (Throwable ignored) {}
+                h.postDelayed(this, 5000);
+            }
+        });
     }
 
     private View viewOf(Object p) throws Exception {

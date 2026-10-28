@@ -52,6 +52,7 @@ public final class MainActivity extends Activity {
     private TextView log;
     private Button run;
     private android.widget.CheckBox spoof;
+    private android.widget.CheckBox esp;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -91,6 +92,19 @@ public final class MainActivity extends Activity {
             @Override public void onClick(View v) { allFiles(); }
         });
         root.addView(stage3, lp());
+
+        esp = new android.widget.CheckBox(this);
+        esp.setText("load ESP overlay (liboxhk) when launching unity");
+        esp.setChecked(getSharedPreferences("oxhk", 0).getBoolean("load_esp", false));
+        esp.setTextColor(0xFFD6D6D6);
+        esp.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+        esp.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+            @Override public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+                getSharedPreferences("oxhk", 0).edit().putBoolean("load_esp", on).commit();
+                append("load esp: " + on);
+            }
+        });
+        root.addView(esp, lp());
 
         spoof = new android.widget.CheckBox(this);
         spoof.setText("spoof game package name (game identity)");
