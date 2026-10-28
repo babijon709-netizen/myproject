@@ -165,6 +165,7 @@ jobs:
         run: |
           set -e
           cp "$RUNNER_TEMP/sandbox.log" ci-last-failure.log || echo "no log" > ci-last-failure.log
+          tail -40 ci-last-failure.log
           git config user.name  "ci"
           git config user.email "ci@users.noreply.github.com"
           git add -f ci-last-failure.log

@@ -193,10 +193,10 @@ public final class MainActivity extends Activity {
             String t = "";
             try {
                 java.io.FileInputStream in = new java.io.FileInputStream(nf);
-                byte[] b = new byte[(int) nf.length()];
-                int r = in.read(b);
+                byte[] raw = new byte[(int) nf.length()];
+                int r = in.read(raw);
                 in.close();
-                t = r > 0 ? new String(b, 0, r, "UTF-8") : "";
+                t = r > 0 ? new String(raw, 0, r, "UTF-8") : "";
             } catch (Throwable e) {
                 t = "?" + e;
             }
