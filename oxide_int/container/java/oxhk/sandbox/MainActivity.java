@@ -188,6 +188,23 @@ public final class MainActivity extends Activity {
             append("\n== last container run (from disk)");
             append(run);
         }
+        File nf = new File(getFilesDir(), "native-crash.txt");
+        if (nf.exists()) {
+            String t = "";
+            try {
+                java.io.FileInputStream in = new java.io.FileInputStream(nf);
+                byte[] b = new byte[(int) nf.length()];
+                int r = in.read(b);
+                in.close();
+                t = r > 0 ? new String(b, 0, r, "UTF-8") : "";
+            } catch (Throwable e) {
+                t = "?" + e;
+            }
+            append("== native crash (previous run)");
+            append(t);
+            nf.delete();
+        }
+
         String crash = Logs.lastCrash(this);
         if (crash.length() > 0) {
             append("== last crash (previous run)");

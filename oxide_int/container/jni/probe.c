@@ -107,26 +107,71 @@ static void step_maps(char *b, size_t cap) {
 static char g_crashPath[512];
 static volatile sig_atomic_t g_inHandler = 0;
 
-struct BtFrame { uintptr_t pc[24]; int n; };
+// module ranges, refreshed on every re-arm: without them a raw PC says nothing, and with them a
+// frame reads as "libil2cpp.so+0xd40fe38", i.e. directly comparable to the dump's RVAs.
+struct Lib { uintptr_t lo, hi; char name[28]; };
+static struct Lib g_libs[24];
+static int g_nlibs = 0;
+
+static int phdr_cb(struct dl_phdr_info* info, size_t, void* arg) {
+    (void) arg;
+    if (!info->dlpi_name || !info->dlpi_name[0]) return 0;
+    int idx = g_nlibs;
+    if (idx >= 24) return 1;
+    uintptr_t lo = (uintptr_t) -1, hi = 0;
+    for (int i = 0; i < info->dlpi_phnum; ++i) {
+        if (info->dlpi_phdr[i].p_type != PT_LOAD) continue;
+        uintptr_t a = info->dlpi_addr + info->dlpi_phdr[i].p_vaddr;
+        if (a < lo) lo = a;
+        uintptr_t e = a + info->dlpi_phdr[i].p_memsz;
+        if (e > hi) hi = e;
+    }
+    if (lo == (uintptr_t) -1) return 0;
+    g_libs[idx].lo = lo;
+    g_libs[idx].hi = hi;
+    const char* base = strrchr(info->dlpi_name, '/');
+    base = base ? base + 1 : info->dlpi_name;
+    strncpy(g_libs[idx].name, base, sizeof g_libs[idx].name - 1);
+    g_libs[idx].name[sizeof g_libs[idx].name - 1] = 0;
+    g_nlibs = idx + 1;
+    return 0;
+}
+
+static void refresh_libs(void) {
+    g_nlibs = 0;
+    dl_iterate_phdr(phdr_cb, NULL);
+}
+
+struct BtFrame { uintptr_t pc[28]; int n; };
 
 static _Unwind_Reason_Code bt_cb(struct _Unwind_Context* ctx, void* arg) {
     struct BtFrame* f = (struct BtFrame*) arg;
     uintptr_t pc = _Unwind_GetIP(ctx);
-    if (pc && f->n < 24) f->pc[f->n++] = pc;
-    return f->n < 24 ? _URC_NO_REASON : _URC_END_OF_STACK;
+    if (pc && f->n < 28) f->pc[f->n++] = pc;
+    return f->n < 28 ? _URC_NO_REASON : _URC_END_OF_STACK;
+}
+
+static int fmt_frame(char* dst, int cap, int idx, uintptr_t pc) {
+    for (int i = 0; i < g_nlibs; ++i) {
+        if (pc >= g_libs[i].lo && pc < g_libs[i].hi)
+            return snprintf(dst, cap, "  #%d %s+0x%lx\n", idx, g_libs[i].name,
+                            (unsigned long) (pc - g_libs[i].lo));
+    }
+    return snprintf(dst, cap, "  #%d 0x%lx ?\n", idx, (unsigned long) pc);
 }
 
 static void fault_handler(int sig, siginfo_t* si, void*) {
     if (g_inHandler) _exit(9);
     g_inHandler = 1;
-    char buf[1024];
+    char buf[2048];
     struct BtFrame f;
     memset(&f, 0, sizeof f);
     _Unwind_Backtrace(bt_cb, &f);
-    int n = snprintf(buf, sizeof buf, "SIG %d (%s) addr=%p code=%d\n", sig, strsignal(sig),
-                     si ? si->si_addr : NULL, si ? si->si_code : 0);
-    for (int i = 0; i < f.n && n < (int) sizeof buf - 32; ++i)
-        n += snprintf(buf + n, sizeof buf - n, "  #%d %p\n", i, (void*) f.pc[i]);
+    int n = snprintf(buf, sizeof buf, "SIG %d (%s) addr=0x%lx code=%d libs=%d\n", sig,
+                     strsignal(sig), (unsigned long) (si ? (uintptr_t) si->si_addr : 0),
+                     si ? si->si_code : 0, g_nlibs);
+    for (int i = 0; i < f.n && n < (int) sizeof buf - 80; ++i)
+        n += fmt_frame(buf + n, (int) sizeof buf - n, i, f.pc[i]);
     int fd = open(g_crashPath, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd >= 0) {
         ssize_t ignored = write(fd, buf, (size_t) n);
@@ -157,6 +202,7 @@ Java_oxhk_sandbox_MainActivity_nativeGuard(JNIEnv* env, jclass, jstring jDir) {
     sa.sa_sigaction = fault_handler;
     sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&sa.sa_mask);
+    refresh_libs();
     int sigs[] = {SIGSEGV, SIGBUS, SIGABRT, SIGILL, SIGFPE};
     for (unsigned i = 0; i < sizeof sigs / sizeof sigs[0]; ++i) sigaction(sigs[i], &sa, NULL);
     __android_log_print(ANDROID_LOG_INFO, TAG, "fault recorder armed: %s", g_crashPath);

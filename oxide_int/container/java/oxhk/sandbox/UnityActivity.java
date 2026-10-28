@@ -187,8 +187,6 @@ public final class UnityActivity extends Activity {
                             + " esp=" + (espLoaded ? "on" : "off") + " " + mem();
                     Log.i(TAG, line);
                     try { Sandbox.say(line); } catch (Throwable ignored) {}
-                    // crashlytics armed its own native handlers ~5 s in and replaced ours;
-                    // put the fault recorder back so a later SIGSEGV still leaves a file
                     try {
                         MainActivity.nativeGuard(getFilesDir().getAbsolutePath());
                     } catch (Throwable ignored) {}
@@ -198,6 +196,24 @@ public final class UnityActivity extends Activity {
         }, "oxhk-heartbeat");
         th.setDaemon(true);
         th.start();
+
+        // crashlytics installs its own native handlers a few seconds in and replaces ours;
+        // whoever installs last wins, so keep putting the recorder back
+        Thread guard = new Thread(new Runnable() {
+            @Override public void run() {
+                while (true) {
+                    try {
+                        MainActivity.nativeGuard(getFilesDir().getAbsolutePath());
+                        Thread.sleep(500);
+                    } catch (InterruptedException e) {
+                        return;
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        }, "oxhk-guard");
+        guard.setDaemon(true);
+        guard.start();
     }
 
     /** RSS and thread count from /proc/self — enough to spot a memory blow-up before the kill. */
